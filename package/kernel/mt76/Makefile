@@ -6,9 +6,9 @@ PKG_RELEASE=1
 PKG_LICENSE:=BSD-3-Clause-Clear
 PKG_LICENSE_FILES:=
 
-PKG_SOURCE_VERSION:=20260302
+PKG_SOURCE_VERSION:=20260308
 PKG_SOURCE_URL:=https://codeload.github.com/ptpt52/mt76/tar.gz/$(PKG_SOURCE_VERSION)?
-PKG_HASH:=892828b6c7b7632aea2e4b8ecace3482d77f148b5e719cb57a1852b9c43b8549
+PKG_HASH:=4f4f066017c55d129d1960a4a31ef6643116e1777844be0ccf970899f7b40c90
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_SOURCE_VERSION).tar.gz
 PKG_VERSION:=$(PKG_SOURCE_VERSION)
 
@@ -323,6 +323,12 @@ define KernelPackage/mt7996e
   	   +@KERNEL_RELAY +@DRIVER_11BE_SUPPORT
   FILES:= $(PKG_BUILD_DIR)/mt7996/mt7996e.ko
   AUTOLOAD:=$(call AutoProbe,mt7996e)
+endef
+
+define KernelPackage/mt7990-firmware
+  $(KernelPackage/mt76-default)
+  TITLE:=MediaTek MT7990 firmware
+  DEPENDS+=+kmod-mt7996e
 endef
 
 define KernelPackage/mt7992-firmware
@@ -666,6 +672,16 @@ define KernelPackage/mt7925-firmware/install
 		$(PKG_BUILD_DIR)/firmware/mt7925/WIFI_MT7925_PATCH_MCU_1_1_hdr.bin \
 		$(PKG_BUILD_DIR)/firmware/mt7925/WIFI_RAM_CODE_MT7925_1_1.bin \
 		$(1)/lib/firmware/mediatek/mt7925
+endef
+
+define KernelPackage/mt7990-firmware/install
+	$(INSTALL_DIR) $(1)/lib/firmware/mediatek/mt7996
+	cp \
+		$(PKG_BUILD_DIR)/firmware/mt7996/mt7990_eeprom.bin \
+		$(PKG_BUILD_DIR)/firmware/mt7996/mt7990_eeprom_2i5i.bin \
+		$(PKG_BUILD_DIR)/firmware/mt7996/mt7990_rom_patch.bin \
+		$(PKG_BUILD_DIR)/firmware/mt7996/mt7990_wm.bin \
+		$(1)/lib/firmware/mediatek/mt7996
 endef
 
 define KernelPackage/mt7992-firmware/install
