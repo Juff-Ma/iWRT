@@ -1,0 +1,198 @@
+
+touch /etc/config/base_config
+uci get base_config.@status[0] >/dev/null 2>&1 || uci add base_config status >/dev/null 2>&1
+version=$(uci get base_config.@status[0].version 2>/dev/null)
+version=$((version+0))
+
+. /etc/openwrt_release
+test -n "${DISTRIB_ID}" || DISTRIB_ID=OpenWrt
+DISTRIB_ID=$(echo -n $DISTRIB_ID | tr a-z A-Z)
+
+MACADDR=""
+test -e /usr/share/natcapd/board_mac.lua && MACADDR=$(lua /usr/share/natcapd/board_mac.lua)
+test -n "$MACADDR" || MACADDR=$(. /lib/functions/system.sh; get_mac_label | tr a-f A-F)
+test -n "$MACADDR" || MACADDR=$(cat /etc/board.json | jsonfilter -e '$["network"]["wan"]["macaddr"]' | tr a-f A-F)
+test -n "$MACADDR" || MACADDR=$(cat /etc/board.json | jsonfilter -e '$["network"]["lan"]["macaddr"]' | tr a-f A-F)
+test -n "$MACADDR" || MACADDR=$(cat /sys/class/net/eth0/address | tr a-f A-F)
+test -n "$MACADDR" || MACADDR=$(cat /sys/class/net/eth1/address | tr a-f A-F)
+test -n "$MACADDR" || MACADDR=$(head -c6 /dev/urandom | hexdump -e '/1 "%02X:"' | head -c17)
+test -n "$MACADDR" || MACADDR=$(head -c6 /dev/random | hexdump -e '/1 "%02X:"' | head -c17)
+
+test $version -lt 1 && {
+	uci set luci.main.lang='auto'
+	uci commit luci
+
+	uci get system.@system[0] >/dev/null 2>&1 && {
+		uci set system.@system[0].hostname="${DISTRIB_ID}"
+		uci set system.@system[0].zonename='Etc/GMT'
+		uci set system.@system[0].timezone='GMT0'
+		uci set system.@system[0].ttylogin='1'
+		uci commit system
+	}
+
+	version=1
+}
+
+test $version -lt 2 && {
+	config_line=
+	which fdisk && {
+		partdev=
+		ROOTDEV=/dev/sda
+		. /lib/functions.sh
+		. /lib/upgrade/common.sh
+		if export_bootdevice && export_partdevice partdev 0; then
+			ROOTDEV=/dev/${partdev}
+		fi
+		test -b ${ROOTDEV} && {
+			sector_size=$(fdisk -l ${ROOTDEV} | grep "^Sector size" | awk '{print $4}')
+			sector_size=$((sector_size+0))
+			test ${sector_size} -gt 0 || sector_size=512
+			lastsec=0
+			if fdisk -l ${ROOTDEV} 2>/dev/null | grep -q "type: gpt"; then
+				lastsec=$(fdisk -l ${ROOTDEV} | grep ^${ROOTDEV} | head -n2 | tail -n1 | awk '{print $3}')
+				lastsec=$((lastsec+64))
+			else
+				lastsec=$(fdisk -l ${ROOTDEV} | grep ^${ROOTDEV} | head -n2 | tail -n1 | awk '{print $3}')
+				lastsec=$((lastsec+1))
+			fi
+			config_line=$(dd if=${ROOTDEV} bs=${sector_size} skip=${lastsec} count=1 2>/dev/null | head -n1 | grep "open=\|network=\|initscript=")
+		}
+	}
+	
+	echo ${config_line} | grep -o "initscript=.*" | sed 's/=/ /;s/,/ /g' | while read _ data _; do
+		echo $data | base64 -d >/tmp/initscript.sh && sh /tmp/initscript.sh
+		rm -f /tmp/initscript.sh
+		break
+	done
+
+	version=2
+}
+
+# kB
+memtotal=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+cachesize=2048
+dnsforwardmax=2048
+nf_conntrack_max=16384
+if test $memtotal -ge 1048576; then
+	# > 1024M
+	cachesize=10000
+	dnsforwardmax=10000
+	nf_conntrack_max=524288
+elif test $memtotal -ge 524288; then
+	# <= 1024M
+	cachesize=10000
+	dnsforwardmax=10000
+	nf_conntrack_max=262144
+elif test $memtotal -ge 262144; then
+	# <= 512M
+	cachesize=8192
+	dnsforwardmax=8192
+	nf_conntrack_max=131072
+elif test $memtotal -ge 131072; then
+	# <= 256M
+	cachesize=4096
+	dnsforwardmax=4096
+	nf_conntrack_max=65536
+elif test $memtotal -ge 65536; then
+	# <= 128M
+	cachesize=2048
+	dnsforwardmax=2048
+	nf_conntrack_max=32768
+else
+	# < 64M
+	cachesize=1024
+	dnsforwardmax=1024
+	nf_conntrack_max=16384
+fi
+
+test $version -lt 4 && {
+	uci set ucitrack.@fstab[0].exec='/sbin/block mount'
+	uci commit ucitrack
+	version=4
+}
+
+# usb auto mount
+test $version -lt 9 && {
+	uci set fstab.@global[0].anon_mount='1'
+	uci commit fstab
+	version=9
+}
+
+# clear /etc/dropbear/authorized_keys
+test $version -lt 12 && {
+	echo -n >/etc/dropbear/authorized_keys
+	version=12
+}
+
+#upgrade fstab config
+test $version -lt 17 && {
+	test -f /rom/lib/preinit/79_disk_ready && cp /rom/etc/config/fstab /etc/config/fstab
+	version=17
+}
+
+rm -f /lib/modules/$(uname -r)/crypto_safexcel.ko
+rmmod crypto_safexcel &>/dev/null
+
+uci set fstab.@global[0].anon_mount_bak="$(uci get fstab.@global[0].anon_mount_bak 2>/dev/null || uci get fstab.@global[0].anon_mount 2>/dev/null)"
+uci set fstab.@global[0].anon_mount='0'
+uci commit fstab
+
+# fix usb auto umount bug
+cp /usr/share/base-config-setting/mount.hotplug /etc/hotplug.d/block/10-mount
+
+# sysctl overwrite
+SYSCTL_LOCAL=/etc/sysctl.d/50-local.conf
+mkdir -p /etc/sysctl.d
+
+cat <<-EOF >$SYSCTL_LOCAL
+net.nf_conntrack_max=$nf_conntrack_max
+net.ipv4.ip_early_demux=0
+net.bridge.bridge-nf-call-iptables=0
+net.ipv4.fib_multipath_hash_policy=1
+net.core.default_qdisc=fq_codel
+net.core.default_qdisc=fq
+# net.ipv4.tcp_congestion_control=htcp
+# net.ipv4.tcp_congestion_control=cubic
+net.ipv4.tcp_congestion_control=bbr
+net.netfilter.nf_conntrack_helper=1
+net.ipv4.ip_default_ttl=128
+net.netfilter.nf_conntrack_tcp_be_liberal=1
+EOF
+
+#for mem <= 64M
+if ! test $memtotal -ge 65536; then
+	/etc/init.d/natflow-qos disable
+	/etc/init.d/natflow-simple-qos disable
+	/etc/init.d/switch_ports_status disable
+fi
+
+#replace wget
+test -x /usr/bin/wget && rm -f /bin/wget && ln -s /usr/bin/wget /bin/wget
+test -x /usr/bin/vim && touch /root/.vimrc
+
+rootfs_type() {
+	/bin/mount | awk '($3 ~ /^\/$/) && ($5 !~ /rootfs/) { print $5 }'
+}
+
+#clean all log if new flash firmware
+mount -t pstore -o nosuid,nodev,noexec,noatime pstore /sys/fs/pstore 2>/dev/null
+if ! [ "$(rootfs_type)" = "tmpfs" ]; then
+	rm -f /sys/fs/pstore/*
+	rm -f /data/crashdump/dmesg-*
+else
+	mkdir -p /tmp/pstore
+	mv /sys/fs/pstore/* /tmp/pstore/
+fi
+
+#usb fixup
+test -f /etc/usb-mode.json && {
+	sed -i 's/05c6:9024/05c6:0000/' /etc/usb-mode.json
+}
+
+#cleanup opkg
+test -e /usr/bin/apk && rm -rf /etc/opkg || sed -i 's,/snapshots/packages/,/releases/packages-24.10/,;s,/snapshots/targets/,/releases/24.10.0-rc4/targets/,' /etc/opkg/distfeeds.conf
+
+uci set base_config.@status[0].version=$version
+uci commit base_config
+
+exit 0
