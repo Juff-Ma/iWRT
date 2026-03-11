@@ -14,7 +14,7 @@ include $(INCLUDE_DIR)/kernel.mk
 
 PKG_NAME:=base-config-setting-iwrt
 PKG_VERSION:=1.1.0
-PKG_RELEASE:=2
+PKG_RELEASE:=3
 
 PKG_MAINTAINER:=Julian Rossbach <contact@juffma.de>
 PKG_LICENSE:=GPL-2.0
@@ -89,6 +89,7 @@ define Package/base-config-setting-iwrt/install
 	$(INSTALL_DIR) $(1)/etc/uci-defaults
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_DATA) ./files/base_config.config $(1)/etc/config/base_config
+	$(INSTALL_DIR) $(1)/usr/share/base-config-setting
 	$(INSTALL_DATA) ./files/uci.defaults $(1)/etc/uci-defaults/95-base-config-setting
 	$(INSTALL_DIR) $(1)/usr/sbin
 	$(INSTALL_BIN) ./files/system_reset.sh $(1)/usr/sbin/system_reset
