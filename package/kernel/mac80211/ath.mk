@@ -1,6 +1,6 @@
 PKG_DRIVERS += \
 	ath ath5k ath6kl ath6kl-sdio ath6kl-usb ath9k ath9k-common ath9k-htc ath10k ath10k-smallbuffers \
-	ath11k ath11k-smallbuffers ath11k-ahb ath11k-pci ath12k carl9170 owl-loader ar5523 wil6210 qcom-qmi-helpers
+	ath11k ath11k-smallbuffers ath11k-ahb ath11k-ahb-smallbuffers ath11k-pci ath11k-pci-smallbuffers ath12k carl9170 owl-loader ar5523 wil6210 qcom-qmi-helpers
 
 PKG_CONFIG_DEPENDS += \
 	CONFIG_PACKAGE_ATH_DEBUG \
@@ -13,6 +13,7 @@ PKG_CONFIG_DEPENDS += \
 	CONFIG_ATH10K_LEDS \
 	CONFIG_ATH10K_THERMAL \
 	CONFIG_ATH11K_THERMAL \
+	CONFIG_ATH12K_THERMAL \
 	CONFIG_ATH_USER_REGD
 
 ifdef CONFIG_PACKAGE_MAC80211_DEBUGFS
@@ -59,6 +60,7 @@ config-$(CONFIG_ATH9K_UBNTHSR) += ATH9K_UBNTHSR
 config-$(CONFIG_ATH10K_LEDS) += ATH10K_LEDS
 config-$(CONFIG_ATH10K_THERMAL) += ATH10K_THERMAL
 config-$(CONFIG_ATH11K_THERMAL) += ATH11K_THERMAL
+config-$(CONFIG_ATH12K_THERMAL) += ATH12K_THERMAL
 
 config-$(call config_package,ath9k-htc) += ATH9K_HTC
 config-$(call config_package,ath10k,regular) += ATH10K ATH10K_PCI
@@ -66,7 +68,9 @@ config-$(call config_package,ath10k-smallbuffers,smallbuffers) += ATH10K ATH10K_
 config-$(call config_package,ath11k,regular) += ATH11K
 config-$(call config_package,ath11k-smallbuffers,smallbuffers) += ATH11K ATH11K_SMALLBUFFERS
 config-$(call config_package,ath11k-ahb) += ATH11K_AHB
+config-$(call config_package,ath11k-ahb-smallbuffers,smallbuffers) += ATH11K_AHB
 config-$(call config_package,ath11k-pci) += ATH11K_PCI
+config-$(call config_package,ath11k-pci-smallbuffers,smallbuffers) += ATH11K_PCI
 config-$(call config_package,ath12k) += ATH12K
 
 config-$(call config_package,ath5k) += ATH5K ATH5K_PCI
@@ -325,7 +329,6 @@ define KernelPackage/ath11k
   $(call KernelPackage/ath11k/Default)
   VARIANT:=regular
   DEFAULT_VARIANT:=1
-  CONFLICTS:=kmod-ath11k-smallbuffers
 endef
 
 define KernelPackage/ath11k/description
@@ -346,13 +349,14 @@ define KernelPackage/ath11k-smallbuffers
   $(call KernelPackage/ath11k/Default)
   TITLE+= (small buffers for low-RAM devices)
   VARIANT:=smallbuffers
-  PROVIDES:=@kmod-ath11k-any
   DEPENDS+= @TARGET_qualcommax
 endef
 
 define KernelPackage/ath11k-ahb
   $(call KernelPackage/mac80211/Default)
   TITLE:=Qualcomm 802.11ax AHB wireless chipset support
+  VARIANT:=regular
+  DEFAULT_VARIANT:=1
   URL:=https://wireless.wiki.kernel.org/en/users/drivers/ath11k
   DEPENDS+= @TARGET_qualcommax +kmod-ath11k-any +kmod-qrtr-smd
   FILES:=$(PKG_BUILD_DIR)/drivers/net/wireless/ath/ath11k/ath11k_ahb.ko
@@ -367,6 +371,8 @@ endef
 define KernelPackage/ath11k-pci
   $(call KernelPackage/mac80211/Default)
   TITLE:=Qualcomm 802.11ax PCI wireless chipset support
+  VARIANT:=regular
+  DEFAULT_VARIANT:=1
   URL:=https://wireless.wiki.kernel.org/en/users/drivers/ath11k
   DEPENDS+= @PCI_SUPPORT +kmod-qrtr-mhi +kmod-ath11k-any
   FILES:=$(PKG_BUILD_DIR)/drivers/net/wireless/ath/ath11k/ath11k_pci.ko
@@ -378,13 +384,34 @@ This module adds support for Qualcomm Technologies 802.11ax family of
 chipsets with PCI bus.
 endef
 
+define KernelPackage/ath11k-ahb-smallbuffers
+  $(call KernelPackage/mac80211/Default)
+  TITLE:=Qualcomm 802.11ax AHB wireless chipset support (small buffers for low-RAM devices)
+  VARIANT:=smallbuffers
+  URL:=https://wireless.wiki.kernel.org/en/users/drivers/ath11k
+  DEPENDS+= @TARGET_qualcommax +kmod-ath11k-smallbuffers +kmod-qrtr-smd
+  FILES:=$(PKG_BUILD_DIR)/drivers/net/wireless/ath/ath11k/ath11k_ahb.ko
+  AUTOLOAD:=$(call AutoProbe,ath11k_ahb)
+endef
+
+define KernelPackage/ath11k-pci-smallbuffers
+  $(call KernelPackage/mac80211/Default)
+  TITLE:=Qualcomm 802.11ax PCI wireless chipset support (small buffers for low-RAM devices)
+  VARIANT:=smallbuffers
+  URL:=https://wireless.wiki.kernel.org/en/users/drivers/ath11k
+  DEPENDS+= @PCI_SUPPORT +kmod-qrtr-mhi +kmod-ath11k-smallbuffers
+  FILES:=$(PKG_BUILD_DIR)/drivers/net/wireless/ath/ath11k/ath11k_pci.ko
+  AUTOLOAD:=$(call AutoProbe,ath11k_pci)
+endef
+
 define KernelPackage/ath12k
   $(call KernelPackage/mac80211/Default)
   TITLE:=Qualcomm 802.11be wireless chipset support
   URL:=https://wireless.wiki.kernel.org/en/users/drivers/ath12k
   DEPENDS+= @PCI_SUPPORT +kmod-ath +@DRIVER_11AC_SUPPORT +@DRIVER_11AX_SUPPORT \
   +kmod-crypto-michael-mic +kmod-qrtr-mhi \
-  +kmod-qcom-qmi-helpers +@DRIVER_11BE_SUPPORT
+  +kmod-qcom-qmi-helpers +@DRIVER_11BE_SUPPORT \
+  +ATH12K_THERMAL:kmod-hwmon-core +ATH12K_THERMAL:kmod-thermal
   FILES:=$(PKG_BUILD_DIR)/drivers/net/wireless/ath/ath12k/ath12k.ko
   AUTOLOAD:=$(call AutoProbe,ath12k)
 endef
@@ -392,6 +419,14 @@ endef
 define KernelPackage/ath12k/description
 This module adds support for Qualcomm Technologies 802.11be family of
 chipsets with PCI bus.
+endef
+
+define KernelPackage/ath12k/config
+
+       config ATH12K_THERMAL
+               bool "Enable ath12k thermal sensor support"
+               depends on PACKAGE_kmod-ath12k
+
 endef
 
 define KernelPackage/carl9170

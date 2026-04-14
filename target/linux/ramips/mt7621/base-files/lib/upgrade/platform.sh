@@ -152,6 +152,7 @@ platform_do_upgrade() {
 	iptime,ax2004m|\
 	iptime,t5004|\
 	jcg,q20|\
+	keenetic,kn-1910|\
 	keenetic,kn-3510|\
 	linksys,e5600|\
 	linksys,e7350|\
@@ -192,6 +193,7 @@ platform_do_upgrade() {
 	xiaomi,mi-router-cr6609|\
 	xiaomi,mi-router-cr660x|\
 	z-router,zr-2660|\
+	z-router,zr-2662|\
 	xwrt,nxc2005ex|\
 	xwrt,nxc2009e-v100|\
 	xwrt,5g-cpe1801k|\

@@ -21,7 +21,7 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
  #endif
 --- a/net/netfilter/nf_nat_core.c
 +++ b/net/netfilter/nf_nat_core.c
-@@ -404,6 +404,32 @@ out:
+@@ -392,6 +392,32 @@ out:
  	return taken;
  }
  
@@ -54,7 +54,7 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
  static bool nf_nat_inet_in_range(const struct nf_conntrack_tuple *t,
  				 const struct nf_nat_range2 *range)
  {
-@@ -692,7 +718,7 @@ find_free_id:
+@@ -680,7 +706,7 @@ find_free_id:
  another_round:
  	for (i = 0; i < attempts; i++, off++) {
  		*keyptr = htons(min + off % range_size);
