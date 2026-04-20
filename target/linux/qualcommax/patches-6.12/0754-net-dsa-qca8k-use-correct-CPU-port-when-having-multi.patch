@@ -13,11 +13,9 @@ Signed-off-by: Ziyang Huang <hzyitc@outlook.com>
  drivers/net/dsa/qca/qca8k-8xxx.c | 38 ++++++--------------------------
  1 file changed, 7 insertions(+), 31 deletions(-)
 
-diff --git a/drivers/net/dsa/qca/qca8k-8xxx.c b/drivers/net/dsa/qca/qca8k-8xxx.c
-index cff22802a423..4d9c755c7994 100644
 --- a/drivers/net/dsa/qca/qca8k-8xxx.c
 +++ b/drivers/net/dsa/qca/qca8k-8xxx.c
-@@ -1087,24 +1087,6 @@ qca8k_setup_mac_pwr_sel(struct qca8k_priv *priv)
+@@ -1087,24 +1087,6 @@ qca8k_setup_mac_pwr_sel(struct qca8k_pri
  	return ret;
  }
  
@@ -90,6 +88,3 @@ index cff22802a423..4d9c755c7994 100644
  		/* For port based vlans to work we need to set the
  		 * default egress vid
  		 */
--- 
-2.40.1
-

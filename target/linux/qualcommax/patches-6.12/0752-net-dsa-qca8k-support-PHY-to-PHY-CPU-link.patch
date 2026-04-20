@@ -58,6 +58,3 @@ index d162487d5efc..cff22802a423 100644
  		return cpu_port;
  	}
  
--- 
-2.40.1
-
