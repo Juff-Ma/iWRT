@@ -3,6 +3,7 @@
 This is a custom fork of X-WRT with changed packages and some additions.
 
 Specifically it's created for the BananaPI BPI-r4 since X-WRT includes many patches that make it work better than vanilla OpenWRT.
+It also includes an x86 build for server use.
 
 Some of the changes made by iWRT to upstream are:
 
