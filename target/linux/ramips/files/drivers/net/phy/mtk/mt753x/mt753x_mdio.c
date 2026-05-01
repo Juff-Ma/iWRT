@@ -407,14 +407,14 @@ static int mt753x_hw_reset(struct gsw_mt753x *gsw)
 		return ret;
 	}
 
-	ret = devm_gpio_request(gsw->dev, gsw->reset_pin, "mt753x-reset");
+	ret = devm_gpio_request_one(gsw->dev, gsw->reset_pin, GPIOF_OUT_INIT_HIGH, "mt753x-reset");
 	if (ret) {
 		dev_info(gsw->dev, "Failed to request gpio %d\n",
 		         gsw->reset_pin);
 		return ret;
 	}
 
-	gpio_direction_output(gsw->reset_pin, 1);
+	gpio_set_value(gsw->reset_pin, 1);
 	msleep(30);
 	gpio_set_value(gsw->reset_pin, 0);
 	msleep(500);
@@ -596,7 +596,7 @@ MODULE_DEVICE_TABLE(of, mt753x_ids);
 
 static struct platform_driver mt753x_driver = {
 	.probe = mt753x_probe,
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,12,0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,12,0) && LINUX_VERSION_CODE < KERNEL_VERSION(6,13,0)
 	.remove_new = mt753x_remove,
 #else
 	.remove = mt753x_remove,

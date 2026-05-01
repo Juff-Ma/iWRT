@@ -514,12 +514,12 @@ static int gsw150_probe(struct platform_device *pdev)
 
 	gsw->reset_pin = of_get_named_gpio(np, "mediatek,reset-pin", 0);
 	if (gsw->reset_pin >= 0) {
-		int ret = devm_gpio_request(gsw->dev, gsw->reset_pin, "gsw150-reset");
+		int ret = devm_gpio_request_one(gsw->dev, gsw->reset_pin, GPIOF_OUT_INIT_HIGH, "gsw150-reset");
 		if (ret) {
 			dev_info(gsw->dev, "Failed to request gpio %d\n",
 			         gsw->reset_pin);
 		} else {
-			gpio_direction_output(gsw->reset_pin, 1); //default high since it is active low
+			gpio_set_value(gsw->reset_pin, 1);
 			msleep(30);
 			gpio_set_value(gsw->reset_pin, 0);
 			msleep(500);
@@ -567,7 +567,7 @@ static int gsw150_remove(struct platform_device *pdev)
 
 static struct platform_driver gsw_driver = {
 	.probe = gsw150_probe,
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,12,0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,12,0) && LINUX_VERSION_CODE < KERNEL_VERSION(6,13,0)
 	.remove_new = gsw150_remove,
 #else
 	.remove = gsw150_remove,
