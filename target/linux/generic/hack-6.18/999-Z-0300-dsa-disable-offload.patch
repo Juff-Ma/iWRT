@@ -1,13 +1,14 @@
-From 2cd61adea1d20f205cd118233ac7436e871a9a7c Mon Sep 17 00:00:00 2001
+From e058dd0f6c50be5377320d8928f633bede832896 Mon Sep 17 00:00:00 2001
 From: Chen Minqiang <ptpt52@gmail.com>
-Date: Fri, 26 Dec 2025 17:58:43 +0800
+Date: Fri, 15 May 2026 11:46:17 +0800
 Subject: [PATCH] dsa: disable offload
 
 Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
 ---
  net/dsa/port.c   |  4 ++++
  net/dsa/switch.c | 20 ++++++++++----------
- 2 files changed, 14 insertions(+), 10 deletions(-)
+ net/dsa/tag.h    |  4 +---
+ 3 files changed, 15 insertions(+), 13 deletions(-)
 
 --- a/net/dsa/port.c
 +++ b/net/dsa/port.c
@@ -106,3 +107,16 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
  		break;
  	case DSA_NOTIFIER_MTU:
  		err = dsa_switch_mtu(ds, info);
+--- a/net/dsa/tag.h
++++ b/net/dsa/tag.h
+@@ -236,9 +236,7 @@ dsa_find_designated_bridge_port_by_vid(s
+  */
+ static inline void dsa_default_offload_fwd_mark(struct sk_buff *skb)
+ {
+-	struct dsa_port *dp = dsa_user_to_port(skb->dev);
+-
+-	skb->offload_fwd_mark = !!(dp->bridge);
++	return;
+ }
+ 
+ /* Helper for removing DSA header tags from packets in the RX path.

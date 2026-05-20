@@ -2096,7 +2096,7 @@ MODULE_DEVICE_TABLE(of, mtk_nand_match);
 
 static struct platform_driver mtk_nand_driver = {
 	.probe = mtk_nand_probe,
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,12,0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,12,0) && LINUX_VERSION_CODE < KERNEL_VERSION(6,13,0)
 	.remove_new = mtk_nand_remove,
 #else
 	.remove = mtk_nand_remove,

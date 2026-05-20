@@ -6,9 +6,9 @@ PKG_RELEASE=1
 PKG_LICENSE:=BSD-3-Clause-Clear
 PKG_LICENSE_FILES:=
 
-PKG_SOURCE_VERSION:=20260429
+PKG_SOURCE_VERSION:=20260512
 PKG_SOURCE_URL:=https://codeload.github.com/ptpt52/mt76/tar.gz/$(PKG_SOURCE_VERSION)?
-PKG_HASH:=28f5fae645e947937fda0914c7699bc23f8cd7de7e7b594e1c365e6ffcb7dc5c
+PKG_HASH:=25d8336d2cb5efee0d85cbd8ff9a96b2e98781b8e2835174520db87bb3ce5e19
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_SOURCE_VERSION).tar.gz
 PKG_VERSION:=$(PKG_SOURCE_VERSION)
 
@@ -187,7 +187,7 @@ endef
 define KernelPackage/mt7622-firmware
   $(KernelPackage/mt76-default)
   TITLE:=MediaTek MT7622 firmware
-  DEPENDS+=+kmod-mt7615e
+  DEPENDS+=@TARGET_mediatek_mt7622 +kmod-mt7615e
 endef
 
 define KernelPackage/mt7663-firmware-ap
