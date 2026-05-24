@@ -1,4 +1,4 @@
-src-git packages https://codeberg.org/Juff-Ma/iWRT-Feed.git;b202605170835_v1
+src-git packages https://codeberg.org/Juff-Ma/iWRT-Feed.git;b202605170835_v2
 src-git luci https://github.com/x-wrt/luci.git;26.04_b202605170835
 src-git routing https://github.com/x-wrt/routing.git;26.04_b202605170835
 src-git telephony https://github.com/x-wrt/telephony.git;26.04_b202605170835
