@@ -69,7 +69,7 @@ Subject: [PATCH] net: dsa mt7530/an8855 reset
  				#address-cells = <1>;
 --- a/drivers/net/dsa/mt7530.c
 +++ b/drivers/net/dsa/mt7530.c
-@@ -2405,9 +2405,9 @@ mt7530_setup(struct dsa_switch *ds)
+@@ -2414,9 +2414,9 @@ mt7530_setup(struct dsa_switch *ds)
  		usleep_range(5000, 5100);
  		reset_control_deassert(priv->rstc);
  	} else {
@@ -81,7 +81,7 @@ Subject: [PATCH] net: dsa mt7530/an8855 reset
  	}
  
  	/* Waiting for MT7530 got to stable */
-@@ -2643,10 +2643,9 @@ mt7531_setup(struct dsa_switch *ds)
+@@ -2654,10 +2654,9 @@ mt7531_setup(struct dsa_switch *ds)
  		usleep_range(5000, 5100);
  		reset_control_deassert(priv->rstc);
  	} else {

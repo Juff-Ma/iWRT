@@ -13,7 +13,7 @@ Signed-off-by: Shiji Yang <yangshiji66@outlook.com>
 
 --- a/drivers/net/dsa/mt7530.c
 +++ b/drivers/net/dsa/mt7530.c
-@@ -2455,6 +2455,15 @@ mt7530_setup(struct dsa_switch *ds)
+@@ -2464,6 +2464,15 @@ mt7530_setup(struct dsa_switch *ds)
  	if ((val & MT7530_XTAL_MASK) == MT7530_XTAL_40MHZ)
  		mt7530_pll_setup(priv);
  

@@ -21,7 +21,7 @@ Subject: [PATCH] switch-add-gsw150
  config AS21XXX_PHY
 --- a/drivers/net/phy/Makefile
 +++ b/drivers/net/phy/Makefile
-@@ -115,3 +115,4 @@ obj-$(CONFIG_TERANETICS_PHY)	+= teraneti
+@@ -114,3 +114,4 @@ obj-$(CONFIG_TERANETICS_PHY)	+= teraneti
  obj-$(CONFIG_VITESSE_PHY)	+= vitesse.o
  obj-$(CONFIG_XILINX_GMII2RGMII) += xilinx_gmii2rgmii.o
  obj-$(CONFIG_MT753X_GSW)	+= mtk/mt753x/

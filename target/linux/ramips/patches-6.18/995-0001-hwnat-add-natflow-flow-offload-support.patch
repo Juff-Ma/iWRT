@@ -351,7 +351,7 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
  	.ndo_bpf		= mtk_xdp,
  	.ndo_xdp_xmit		= mtk_xdp_xmit,
  	.ndo_select_queue	= mtk_select_queue,
-@@ -5767,7 +5884,8 @@ static int mtk_probe(struct platform_dev
+@@ -5783,7 +5900,8 @@ static int mtk_probe(struct platform_dev
  err_unreg_netdev:
  	mtk_unreg_dev(eth);
  err_deinit_ppe:
@@ -361,7 +361,7 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
  	mtk_mdio_cleanup(eth);
  err_free_dev:
  	mtk_free_dev(eth);
-@@ -5787,6 +5905,8 @@ static void mtk_remove(struct platform_d
+@@ -5803,6 +5921,8 @@ static void mtk_remove(struct platform_d
  	struct mtk_mac *mac;
  	int i;
  
@@ -2341,7 +2341,7 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
  #define PPP_VERSION	"2.4.2"
  
  /*
-@@ -1613,6 +1615,26 @@ static int ppp_fill_forward_path(struct
+@@ -1616,6 +1618,26 @@ static int ppp_fill_forward_path(struct
  	return chan->ops->fill_forward_path(ctx, path, chan);
  }
  
@@ -2368,7 +2368,7 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
  static const struct net_device_ops ppp_netdev_ops = {
  	.ndo_init	 = ppp_dev_init,
  	.ndo_uninit      = ppp_dev_uninit,
-@@ -1620,6 +1642,7 @@ static const struct net_device_ops ppp_n
+@@ -1623,6 +1645,7 @@ static const struct net_device_ops ppp_n
  	.ndo_siocdevprivate = ppp_net_siocdevprivate,
  	.ndo_get_stats64 = ppp_get_stats64,
  	.ndo_fill_forward_path = ppp_fill_forward_path,
@@ -2387,7 +2387,7 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
  #include <linux/nsproxy.h>
  #include <net/net_namespace.h>
  #include <net/netns/generic.h>
-@@ -1000,9 +1002,30 @@ static int pppoe_fill_forward_path(struc
+@@ -1006,9 +1008,30 @@ static int pppoe_fill_forward_path(struc
  	return 0;
  }
  

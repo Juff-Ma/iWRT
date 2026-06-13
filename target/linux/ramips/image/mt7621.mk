@@ -665,6 +665,13 @@ define Device/asus_rt-ax53u
   IMAGE/factory.bin := append-kernel | pad-to $$(KERNEL_SIZE) | append-ubi | \
 	check-size
   DEVICE_PACKAGES := kmod-mt7915-firmware kmod-usb3 kmod-usb-ledtrig-usbport
+ifeq ($(IB),)
+ifneq ($(CONFIG_TARGET_ROOTFS_INITRAMFS),)
+  ARTIFACTS := initramfs-factory.trx
+  ARTIFACT/initramfs-factory.trx := append-image-stage initramfs-kernel.bin | \
+	check-size 16m | asus-trx -v 2 -n $$(DEVICE_MODEL) -b 386 -e 19999
+endif
+endif
 endef
 TARGET_DEVICES += asus_rt-ax53u
 
@@ -1464,6 +1471,14 @@ define Device/elecom_wrc-gs
 	append-string MT7621_ELECOM_$$$$(ELECOM_HWNAME)
   DEVICE_PACKAGES := kmod-mt7615-firmware -uboot-envtools
 endef
+
+define Device/elecom_wmc-c2533gst
+  $(Device/elecom_wrc-gs)
+  IMAGE_SIZE := 24576k
+  DEVICE_MODEL := WMC-C2533GST
+  ELECOM_HWNAME := WMC-2HC
+endef
+TARGET_DEVICES += elecom_wmc-c2533gst
 
 define Device/elecom_wmc-m1267gst2
   $(Device/elecom_wrc-gs)

@@ -49,7 +49,7 @@ index d162487d5efc..cff22802a423 100644
  	return -EINVAL;
  }
  
-@@ -1950,7 +1952,7 @@ qca8k_setup(struct dsa_switch *ds)
+@@ -1955,7 +1957,7 @@ qca8k_setup(struct dsa_switch *ds)
  
  	cpu_port = qca8k_find_cpu_port(ds);
  	if (cpu_port < 0) {
