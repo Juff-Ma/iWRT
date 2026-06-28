@@ -206,6 +206,7 @@ platform_do_upgrade() {
 	cmcc,a10-ubootmod|\
 	cmcc,rax3000m|\
 	comfast,cf-wr632ax-ubootmod|\
+	creatlentem,clt-r30b1-ubi|\
 	cudy,tr3000-v1-ubootmod|\
 	cudy,wbr3000uax-v1-ubootmod|\
 	cudy,wr3000e-v1-ubootmod|\
@@ -288,6 +289,7 @@ platform_do_upgrade() {
 	xiaomi,redmi-router-ax6000-stock)
 		CI_KERN_UBIPART="ubi_kernel"
 		CI_ROOT_UBIPART="ubi"
+		CI_DATA_UBIPART="ubi"
 		nand_do_upgrade "$1"
 		;;
 	buffalo,wsr-6000ax8|\
@@ -426,6 +428,7 @@ platform_check_image() {
 	cmcc,a10-ubootmod|\
 	cmcc,rax3000m|\
 	comfast,cf-wr632ax-ubootmod|\
+	creatlentem,clt-r30b1-ubi|\
 	cudy,tr3000-v1-ubootmod|\
 	cudy,wbr3000uax-v1-ubootmod|\
 	cudy,wr3000e-v1-ubootmod|\

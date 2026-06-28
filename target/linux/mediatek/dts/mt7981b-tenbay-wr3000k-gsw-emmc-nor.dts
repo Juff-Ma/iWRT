@@ -172,6 +172,10 @@
 					#address-cells = <1>;
 					#size-cells = <1>;
 
+					eeprom_factory_0: eeprom@0 {
+						reg = <0x0 0x1000>;
+					};
+
 					macaddr_4: macaddr@4 {
 						compatible = "mac-base";
 						reg = <0x4 0x6>;
@@ -269,7 +273,8 @@
 };
 
 &wifi {
-	mediatek,mtd-eeprom = <&factory 0x0>;
+	nvmem-cells = <&eeprom_factory_0>;
+	nvmem-cell-names = "eeprom";
 
 	status = "okay";
 };
