@@ -84,8 +84,11 @@ enum {
 };
 
 #define REG_ESW_PORT_PCR(x)	(0x2004 | ((x) << 8))
+#define REG_ESW_PORT_PSC(x)	(0x200C | ((x) << 8))
 #define REG_ESW_PORT_PVC(x)	(0x2010 | ((x) << 8))
 #define REG_ESW_PORT_PPBV1(x)	(0x2014 | ((x) << 8))
+
+#define REG_ESW_PORT_PSC_SA_DIS			BIT(4)
 
 #define REG_ESW_PORT_PCR_MIRROR_SRC_RX_BIT	BIT(8)
 #define REG_ESW_PORT_PCR_MIRROR_SRC_TX_BIT	BIT(9)
@@ -1069,6 +1072,7 @@ mt7530_probe(struct device *dev, void __iomem *base, struct mii_bus *bus, int vl
 	struct mt7530_priv *mt7530;
 	struct mt7530_mapping *map;
 	int ret;
+	int i;
 
 	mt7530 = devm_kzalloc(dev, sizeof(struct mt7530_priv), GFP_KERNEL);
 	if (!mt7530)
@@ -1093,16 +1097,25 @@ mt7530_probe(struct device *dev, void __iomem *base, struct mii_bus *bus, int vl
 
 	mutex_init(&mt7530->reg_mutex);
 
-	ret = register_switch(swdev, NULL);
-	if (ret) {
-		dev_err(dev, "failed to register mt7530\n");
-		return ret;
-	}
+	if (!of_property_present(dev->of_node, "mediatek,no-swconfig")) {
+		ret = register_switch(swdev, NULL);
+		if (ret) {
+			dev_err(dev, "failed to register %s\n", swdev->name);
+			return ret;
+		}
 
-	map = mt7530_find_mapping(dev->of_node);
-	if (map)
-		mt7530_apply_mapping(mt7530, map);
-	mt7530_apply_config(swdev);
+		map = mt7530_find_mapping(dev->of_node);
+		if (map)
+			mt7530_apply_mapping(mt7530, map);
+		mt7530_apply_config(swdev);
+	} else {
+		pr_info("%s: swconfig disabled, MAC learning disabled on all ports\n", swdev->name);
+
+		for (i = 0; i < MT7530_NUM_PORTS; i++) {
+			mt7530_w32(mt7530, REG_ESW_PORT_PSC(i),
+				mt7530_r32(mt7530, REG_ESW_PORT_PSC(i)) | REG_ESW_PORT_PSC_SA_DIS);
+		}
+	}
 
 	/* magic vodoo */
 	if (bus && mt7530_r32(mt7530, REG_HWTRAP) !=  0x1117edf) {

@@ -414,18 +414,6 @@ ramips_setup_macs()
 	ruijie,rg-ew1800gx)
 		label_mac=$(mtd_get_mac_ascii product_info "ethaddr")
 		;;
-	xwrt,ac8000p|\
-	xwrt,nxc200p|\
-	xwrt,puppies|\
-	xwrt,t-cpe1200k-v01|\
-	xwrt,t-cpe1201k-v01|\
-	xwrt,x-sdwan-1200)
-		lan_mac=$(cat /sys/class/net/eth0/address)
-		wan_mac=$(macaddr_add "$lan_mac" 2)
-		;;
-	ruijie,rg-ew1800gx)
-		label_mac=$(mtd_get_mac_ascii product_info "ethaddr")
-		;;
 	esac
 
 	[ -n "$lan_mac" ] && ucidef_set_interface_macaddr "lan" $lan_mac
