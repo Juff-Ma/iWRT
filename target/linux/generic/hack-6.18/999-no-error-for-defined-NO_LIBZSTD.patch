@@ -1,6 +1,6 @@
 --- a/tools/perf/Makefile.config
 +++ b/tools/perf/Makefile.config
-@@ -577,7 +577,7 @@ ifndef NO_LIBELF
+@@ -578,7 +578,7 @@ ifndef NO_LIBELF
  
    ifeq ($(feature-libelf-zstd), 1)
      ifdef NO_LIBZSTD

@@ -10,9 +10,9 @@ Subject: [PATCH] net: Allocate ifindex from range 1-63 using bitmap
 
 --- a/include/net/net_namespace.h
 +++ b/include/net/net_namespace.h
-@@ -189,6 +189,7 @@ struct net {
- #if IS_ENABLED(CONFIG_SMC)
- 	struct netns_smc	smc;
+@@ -193,6 +193,7 @@ struct net {
+ 	/* Move to a better place when the config guard is removed. */
+ 	struct mutex		rtnl_mutex;
  #endif
 +	unsigned int net_device_ifindex_bits[2];
  } __randomize_layout;
@@ -20,7 +20,7 @@ Subject: [PATCH] net: Allocate ifindex from range 1-63 using bitmap
  #include <linux/seq_file_net.h>
 --- a/net/core/dev.c
 +++ b/net/core/dev.c
-@@ -10498,6 +10498,15 @@ static void netdev_free_phy_link_topolog
+@@ -10500,6 +10500,15 @@ static void netdev_free_phy_link_topolog
  	}
  }
  
@@ -36,7 +36,7 @@ Subject: [PATCH] net: Allocate ifindex from range 1-63 using bitmap
  /**
   * register_netdevice() - register a network device
   * @dev: device to register
-@@ -10566,11 +10575,36 @@ int register_netdevice(struct net_device
+@@ -10568,11 +10577,36 @@ int register_netdevice(struct net_device
  	if (ret)
  		goto err_uninit;
  
@@ -73,7 +73,7 @@ Subject: [PATCH] net: Allocate ifindex from range 1-63 using bitmap
  	/* Transfer changeable features to wanted_features and enable
  	 * software offloads (GSO and GRO).
  	 */
-@@ -10676,6 +10710,7 @@ out:
+@@ -10678,6 +10712,7 @@ out:
  err_uninit_notify:
  	call_netdevice_notifiers(NETDEV_PRE_UNINIT, dev);
  err_ifindex_release:
@@ -81,7 +81,7 @@ Subject: [PATCH] net: Allocate ifindex from range 1-63 using bitmap
  	dev_index_release(net, dev->ifindex);
  err_free_pcpu:
  	netdev_do_free_pcpu_stats(dev);
-@@ -11466,6 +11501,7 @@ void unregister_netdevice_queue(struct n
+@@ -11468,6 +11503,7 @@ void unregister_netdevice_queue(struct n
  	if (head) {
  		list_move_tail(&dev->unreg_list, head);
  	} else {

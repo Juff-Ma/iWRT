@@ -286,9 +286,9 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
  	}
  
  	/* set interrupt delays based on current Net DIM sample */
-@@ -5092,6 +5160,54 @@ static u16 mtk_select_queue(struct net_d
- 	return queue;
+@@ -5121,6 +5189,54 @@ static netdev_features_t mtk_features_ch
  }
+ #endif
  
 +static int
 +mtk_flow_offload(flow_offload_type_t type, flow_offload_t *flow,
@@ -341,7 +341,7 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
  static const struct ethtool_ops mtk_ethtool_ops = {
  	.get_link_ksettings	= mtk_get_link_ksettings,
  	.set_link_ksettings	= mtk_set_link_ksettings,
-@@ -5127,7 +5243,8 @@ static const struct net_device_ops mtk_n
+@@ -5156,7 +5272,8 @@ static const struct net_device_ops mtk_n
  #ifdef CONFIG_NET_POLL_CONTROLLER
  	.ndo_poll_controller	= mtk_poll_controller,
  #endif
@@ -351,7 +351,7 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
  	.ndo_bpf		= mtk_xdp,
  	.ndo_xdp_xmit		= mtk_xdp_xmit,
  	.ndo_select_queue	= mtk_select_queue,
-@@ -5783,7 +5900,8 @@ static int mtk_probe(struct platform_dev
+@@ -5815,7 +5932,8 @@ static int mtk_probe(struct platform_dev
  err_unreg_netdev:
  	mtk_unreg_dev(eth);
  err_deinit_ppe:
@@ -361,7 +361,7 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
  	mtk_mdio_cleanup(eth);
  err_free_dev:
  	mtk_free_dev(eth);
-@@ -5803,6 +5921,8 @@ static void mtk_remove(struct platform_d
+@@ -5835,6 +5953,8 @@ static void mtk_remove(struct platform_d
  	struct mtk_mac *mac;
  	int i;
  
@@ -519,7 +519,7 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
  	struct mtk_foe_mac_info l2;
  };
  
-@@ -344,10 +353,21 @@ struct mtk_ppe {
+@@ -344,10 +353,23 @@ struct mtk_ppe {
  	struct hlist_head *foe_flow;
  
  	struct rhashtable l2_flows;
@@ -537,12 +537,14 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
 +	void *priv; /* for keepalive callback */
  };
  
++extern spinlock_t mtk_ppe_ag_lock;
++
 +void mtk_ppe_read_mib(struct mtk_ppe *ppe, unsigned int hash, struct mtk_foe_accounting *diff);
 +
  struct mtk_ppe *mtk_ppe_init(struct mtk_eth *eth, void __iomem *base, int index);
  
  void mtk_ppe_deinit(struct mtk_eth *eth);
-@@ -378,10 +398,14 @@ mtk_ppe_check_skb(struct mtk_ppe *ppe, s
+@@ -378,10 +400,14 @@ mtk_ppe_check_skb(struct mtk_ppe *ppe, s
  	ppe->foe_check_time[hash] = now;
  	__mtk_ppe_check_skb(ppe, skb, hash);
  }
@@ -557,7 +559,7 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
  int mtk_foe_entry_set_pse_port(struct mtk_eth *eth,
  			       struct mtk_foe_entry *entry, u8 port);
  int mtk_foe_entry_set_ipv4_tuple(struct mtk_eth *eth,
-@@ -403,10 +427,13 @@ int mtk_foe_entry_set_wdma(struct mtk_et
+@@ -403,10 +429,13 @@ int mtk_foe_entry_set_wdma(struct mtk_et
  			   bool amsdu_en);
  int mtk_foe_entry_set_queue(struct mtk_eth *eth, struct mtk_foe_entry *entry,
  			    unsigned int queue);
@@ -575,7 +577,7 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
 -#endif
 --- /dev/null
 +++ b/drivers/net/ethernet/mediatek/mtk_ppe1.c
-@@ -0,0 +1,851 @@
+@@ -0,0 +1,855 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/* Copyright (C) 2020 Felix Fietkau <nbd@nbd.name> */
 +
@@ -592,19 +594,23 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
 +#include "mtk_ppe_regs.h"
 +
 +static struct mtk_ppe_account_group mtk_ppe_account_group_entry[64];
++DEFINE_SPINLOCK(mtk_ppe_ag_lock);
 +
 +static u32 mtk_ppe_account_group_alloc(void)
 +{
 +	u32 i;
++	spin_lock_bh(&mtk_ppe_ag_lock);
 +	for (i = 1; i < 64; i++) {
 +		if (mtk_ppe_account_group_entry[i].state == MTK_FOE_STATE_INVALID) {
 +			mtk_ppe_account_group_entry[i].state = MTK_FOE_STATE_FIN; /* mark FIN as in use begin */
 +			mtk_ppe_account_group_entry[i].bytes = 0;
 +			mtk_ppe_account_group_entry[i].packets = 0;
 +			mtk_ppe_account_group_entry[i].jiffies = jiffies;
++			spin_unlock_bh(&mtk_ppe_ag_lock);
 +			return i;
 +		}
 +	}
++	spin_unlock_bh(&mtk_ppe_ag_lock);
 +	return 0;
 +}
 +
@@ -1462,7 +1468,7 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
  	return 0;
 --- /dev/null
 +++ b/drivers/net/ethernet/mediatek/mtk_ppe_offload1.c
-@@ -0,0 +1,725 @@
+@@ -0,0 +1,741 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + *  Copyright (C) 2020 Felix Fietkau <nbd@nbd.name>
@@ -1487,6 +1493,7 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
 +
 +static struct timer_list ag_timer;
 +static void *ag_timer_eth =  NULL;
++static bool ag_timer_stopping = false;
 +
 +#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 15, 0)
 +static void mtk_ppe_account_group_walk(unsigned long ignore)
@@ -1505,6 +1512,8 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
 +			bytes = mtk_r32(eth, 0x2000 + i * 16);
 +			bytes += ((unsigned long long)mtk_r32(eth, 0x2000 + i * 16 + 4)) << 32;
 +			packets = mtk_r32(eth, 0x2000 + i * 16 + 8);
++
++			spin_lock_bh(&mtk_ppe_ag_lock);
 +			if (bytes > 0 || packets > 0) {
 +				ag->jiffies = jiffies;
 +				ag->bytes += bytes;
@@ -1512,18 +1521,22 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
 +			}
 +			ag->speed_bytes[(jiffies/HZ/2) % 4] += (unsigned int)bytes;
 +			ag->speed_packets[(jiffies/HZ/2) % 4] += (unsigned int)packets;
++			spin_unlock_bh(&mtk_ppe_ag_lock);
 +
 +			if ((func = ag->priv) != NULL && (((jiffies/HZ) % 2 == 0 && i % 2 == 0) || ((jiffies/HZ) % 2 == 1 && i % 2 == 1)) ) {
 +				struct mtk_foe_entry *entry = mtk_foe_get_entry(eth->ppe[0], ag->hash);
 +				if (FIELD_GET(MTK_FOE_IB1_STATE, entry->ib1) == MTK_FOE_STATE_BIND && bytes > 0 && packets > 0) {
++					spin_lock_bh(&mtk_ppe_ag_lock);
 +					bytes = ag->bytes;
 +					packets = ag->packets;
-+					if (func(ag->hash, bytes, packets, ag->speed_bytes, ag->speed_packets, 1, jiffies) != 0) {
++					ag->bytes = 0;
++					ag->packets = 0;
++					spin_unlock_bh(&mtk_ppe_ag_lock);
++
++					if (func(ag->hash, (unsigned long)bytes, (unsigned long)packets, ag->speed_bytes, ag->speed_packets, 1, jiffies) != 0) {
 +						mtk_flow_offload_foe_delete(eth, 0, ag->hash);
 +						ag->state = MTK_FOE_STATE_INVALID;
 +					}
-+					ag->bytes = 0;
-+					ag->packets = 0;
 +				} else {
 +					ag->priv = NULL;
 +				}
@@ -1539,7 +1552,8 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
 +		}
 +	}
 +
-+	mod_timer(&ag_timer, jiffies + HZ * 1);
++	if (!ag_timer_stopping)
++		mod_timer(&ag_timer, jiffies + HZ * 1);
 +}
 +
 +static void mtk_ppe_account_group_walk_stop(void)
@@ -2083,16 +2097,21 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
 +			u32 ag_idx = FIELD_GET(MTK_FOE_IB2_PORT_AG, entry->ipv4.ib2);
 +			struct mtk_ppe_account_group *ag = mtk_ppe_account_group_get(ag_idx);
 +			if (ag && ag->state == MTK_FOE_STATE_BIND && ag->hash == hash && ag->priv != func) {
-+				unsigned long bytes = ag->bytes;
-+				unsigned long packets = ag->packets;
-+				if (func(hash, bytes, packets, ag->speed_bytes, ag->speed_packets, 1, jiffies) != 0) {
++				unsigned long long bytes;
++				unsigned long long packets;
++				spin_lock_bh(&mtk_ppe_ag_lock);
++				bytes = ag->bytes;
++				packets = ag->packets;
++				ag->bytes = 0;
++				ag->packets = 0;
++				if (ag->priv != (void *)func)
++					ag->priv = func;
++				spin_unlock_bh(&mtk_ppe_ag_lock);
++
++				if (func(hash, (unsigned long)bytes, (unsigned long)packets, ag->speed_bytes, ag->speed_packets, 1, jiffies) != 0) {
 +					mtk_flow_offload_foe_delete(eth, ppe_idx, hash);
 +					ag->state = MTK_FOE_STATE_INVALID;
 +				}
-+				ag->bytes -= bytes;
-+				ag->packets -= packets;
-+				if (ag->priv != (void *)func)
-+					ag->priv = func;
 +			} else {
 +				if (func(hash, 0, 0, NULL, NULL, 1, jiffies) != 0) {
 +					mtk_flow_offload_foe_delete(eth, ppe_idx, hash);
@@ -2168,6 +2187,7 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
 +		timer_setup(&ag_timer, mtk_ppe_account_group_walk, 0);
 +#endif
 +		ag_timer_eth = eth;
++		ag_timer_stopping = false;
 +		mod_timer(&ag_timer, jiffies + 8 * HZ);
 +	}
 +
@@ -2185,8 +2205,10 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
 +		flow_offload_add_extdev = NULL;
 +	}
 +
-+	if (mtk_is_netsys_v1(eth))
-+		timer_delete(&ag_timer);
++	if (mtk_is_netsys_v1(eth)) {
++		ag_timer_stopping = true;
++		timer_delete_sync(&ag_timer);
++	}
 +}
 --- a/drivers/net/ethernet/mediatek/mtk_ppe_regs.h
 +++ b/drivers/net/ethernet/mediatek/mtk_ppe_regs.h
@@ -2341,7 +2363,7 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
  #define PPP_VERSION	"2.4.2"
  
  /*
-@@ -1616,6 +1618,26 @@ static int ppp_fill_forward_path(struct
+@@ -1620,6 +1622,26 @@ static int ppp_fill_forward_path(struct
  	return chan->ops->fill_forward_path(ctx, path, chan);
  }
  
@@ -2368,7 +2390,7 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
  static const struct net_device_ops ppp_netdev_ops = {
  	.ndo_init	 = ppp_dev_init,
  	.ndo_uninit      = ppp_dev_uninit,
-@@ -1623,6 +1645,7 @@ static const struct net_device_ops ppp_n
+@@ -1627,6 +1649,7 @@ static const struct net_device_ops ppp_n
  	.ndo_siocdevprivate = ppp_net_siocdevprivate,
  	.ndo_get_stats64 = ppp_get_stats64,
  	.ndo_fill_forward_path = ppp_fill_forward_path,
@@ -2387,7 +2409,7 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
  #include <linux/nsproxy.h>
  #include <net/net_namespace.h>
  #include <net/netns/generic.h>
-@@ -1006,9 +1008,30 @@ static int pppoe_fill_forward_path(struc
+@@ -1007,9 +1009,30 @@ static int pppoe_fill_forward_path(struc
  	return 0;
  }
  

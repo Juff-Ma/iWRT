@@ -31,8 +31,10 @@ new driver-side entries are required for AN7563.
     use EN7581_*_RST IDs so they match the en7581 reset map used
     by reset-airoha.
   * configs/an7563_evb_defconfig clones en7523_evb_defconfig with
-    TARGET flipped, default device tree pointed at an7563-evb and
-    CONFIG_SYSCON enabled (needed by the regmap helpers).
+    TARGET flipped, default device tree pointed at an7563-evb,
+    CONFIG_SYSCON enabled, raw MTD environment storage, no unused
+    UBI command / driver support, LZMA decompression and a larger
+    bootm buffer for OpenWrt FIT images.
 
 Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
 ---
@@ -47,10 +49,10 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
  board/airoha/an7563/MAINTAINERS          |   5 +
  board/airoha/an7563/Makefile             |   3 +
  board/airoha/an7563/an7563_rfb.c         |  16 ++
- configs/an7563_evb_defconfig             |  86 +++++++
+ configs/an7563_evb_defconfig             |  73 ++++++
  defenvs/an7563_rfb_env                   |   4 +
  include/configs/an7563.h                 |  19 ++
- 14 files changed, 563 insertions(+)
+ 14 files changed, 550 insertions(+)
  create mode 100644 arch/arm/dts/an7563-evb.dts
  create mode 100644 arch/arm/dts/an7563.dtsi
  create mode 120000 arch/arm/include/asm/arch-an7563
@@ -616,7 +618,7 @@ new file mode 100644
 index 0000000..fcaecea
 --- /dev/null
 +++ b/configs/an7563_evb_defconfig
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,73 @@
 +CONFIG_ARM=y
 +CONFIG_SYS_ARCH_TIMER=y
 +CONFIG_ARCH_AIROHA=y
@@ -626,12 +628,15 @@ index 0000000..fcaecea
 +CONFIG_SYS_MALLOC_F_LEN=0x4000
 +CONFIG_NR_DRAM_BANKS=1
 +CONFIG_ENV_SIZE=0x4000
++CONFIG_ENV_OFFSET=0x7c000
 +CONFIG_DM_GPIO=y
 +CONFIG_DEFAULT_DEVICE_TREE="an7563-evb"
 +CONFIG_SYS_LOAD_ADDR=0x81800000
 +CONFIG_BUILD_TARGET="u-boot.bin"
 +CONFIG_FIT=y
 +CONFIG_FIT_VERBOSE=y
++CONFIG_LZMA=y
++CONFIG_SYS_BOOTM_LEN=0x2000000
 +CONFIG_BOOTDELAY=3
 +CONFIG_DEFAULT_FDT_FILE="an7563-evb"
 +CONFIG_SYS_PBSIZE=1049
@@ -655,8 +660,9 @@ index 0000000..fcaecea
 +CONFIG_CMD_MTDPARTS=y
 +CONFIG_CMD_LOG=y
 +CONFIG_ENV_OVERWRITE=y
-+# CONFIG_ENV_IS_IN_MTD is not set
++CONFIG_ENV_IS_IN_MTD=y
 +CONFIG_ENV_RELOC_GD_ENV_ADDR=y
++CONFIG_ENV_MTD_DEV="spi-nand0"
 +CONFIG_ENV_VARS_UBOOT_RUNTIME_CONFIG=y
 +CONFIG_NET_RANDOM_ETHADDR=y
 +CONFIG_SYS_RX_ETH_BUFFER=8
@@ -683,23 +689,6 @@ index 0000000..fcaecea
 +CONFIG_SPI=y
 +CONFIG_DM_SPI=y
 +CONFIG_AIROHA_SNFI_SPI=y
-+CONFIG_CMD_UBI=y
-+# CONFIG_CMD_UBI_RENAME is not set
-+CONFIG_CMD_UBIFS=y
-+CONFIG_ENV_IS_IN_UBI=y
-+CONFIG_ENV_REDUNDANT=y
-+CONFIG_ENV_UBI_PART="ubi"
-+CONFIG_ENV_UBI_VOLUME="ubootenv"
-+CONFIG_ENV_UBI_VOLUME_REDUND="ubootenv2"
-+CONFIG_ENV_UBI_VID_OFFSET=0
-+CONFIG_MTD_UBI=y
-+CONFIG_MTD_UBI_MODULE=y
-+CONFIG_MTD_UBI_WL_THRESHOLD=4096
-+CONFIG_MTD_UBI_BEB_LIMIT=20
-+# CONFIG_MTD_UBI_FASTMAP is not set
-+CONFIG_UBI_BLOCK=y
-+# CONFIG_UBIFS_SILENCE_MSG is not set
-+# CONFIG_UBIFS_SILENCE_DEBUG_DUMP is not set
 +CONFIG_ENV_USE_DEFAULT_ENV_TEXT_FILE=y
 +CONFIG_ENV_DEFAULT_ENV_TEXT_FILE="defenvs/an7563_rfb_env"
 +CONFIG_SHA512=y
@@ -712,7 +701,7 @@ index 0000000..716ddc3
 +loadaddr=0x81800000
 +ipaddr=192.168.1.1
 +serverip=192.168.1.10
-+bootargs=ubi.mtd=ubi root=/dev/ubiblock0_5 rootwait
++bootargs=console=ttyS0,115200n8 earlycon=uart8250,mmio32,0x1fbf0000 root=/dev/mtdblock5 ro rootwait
 diff --git a/include/configs/an7563.h b/include/configs/an7563.h
 new file mode 100644
 index 0000000..3618b2f

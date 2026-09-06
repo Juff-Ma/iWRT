@@ -138,7 +138,7 @@
 		compatible = "jedec,spi-nor";
 		reg = <0>;
 
-		force-sr-unprotect;
+		linux,force-sr-unlock;
 
 		spi-max-frequency = <52000000>;
 		spi-tx-bus-width = <4>;

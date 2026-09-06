@@ -29,7 +29,7 @@ define Build/elecom-header
 		echo -ne "$$(echo "031d6129$${fw_size}06000000$(model_id)" | \
 			sed 's/../\\x&/g')"; \
 		dd if=/dev/zero bs=92 count=1; \
-		data_crc="$$(dd if=$@ | gzip -c | tail -c 8 | \
+		data_crc="$$(dd if=$@ | libdeflate-gzip -c | tail -c 8 | \
 			od -An -N4 -tx4 --endian little | tr -d ' \n')"; \
 		echo -ne "$$(echo "$${data_crc}00000000" | sed 's/../\\x&/g')"; \
 		dd if=$@; \
@@ -220,6 +220,18 @@ define Device/cudy_lt400e-v1
   SUPPORTED_DEVICES += cudy,lt400e
 endef
 TARGET_DEVICES += cudy_lt400e-v1
+
+define Device/cudy_lt500-outdoor-v1
+  IMAGE_SIZE := 15872k
+  DEVICE_VENDOR := Cudy
+  DEVICE_MODEL := LT500 Outdoor
+  DEVICE_VARIANT := v1
+  DEVICE_PACKAGES := kmod-mt7615e kmod-mt7663-firmware-ap kmod-usb2 \
+	kmod-usb-ohci kmod-usb-net-cdc-ether kmod-usb-serial-option
+  UIMAGE_NAME := R35
+  SUPPORTED_DEVICES += R35
+endef
+TARGET_DEVICES += cudy_lt500-outdoor-v1
 
 define Device/cudy_m1200-v1
   IMAGE_SIZE := 15872k

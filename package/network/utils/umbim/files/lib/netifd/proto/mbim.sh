@@ -254,7 +254,7 @@ _proto_mbim_setup() {
 			json_add_string proto "dhcp"
 		fi
 
-		[ "$peerdns" = 0 -a "$dhcp" != 1 ] || {
+		[ "$dhcp" != 1 ] || {
 			json_add_array dns
 			for server in $(_proto_mbim_get_field ipv4dnsserver "$mbimconfig"); do
 				json_add_string "" "$server"
@@ -299,7 +299,7 @@ _proto_mbim_setup() {
 			[ "$sourcefilter" = "0" ] && json_add_boolean sourcefilter "0"
 		fi
 
-		[ "$peerdns" = 0 -a "$dhcpv6" != 1 ] || {
+		[ "$dhcpv6" != 1 ] || {
 			json_add_array dns
 			for server in $(_proto_mbim_get_field ipv6dnsserver "$mbimconfig"); do
 				json_add_string "" "$server"
