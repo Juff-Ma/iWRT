@@ -11,7 +11,7 @@ include $(INCLUDE_DIR)/kernel.mk
 
 PKG_NAME:=lte-modem-xwrt-csac
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 PKG_MAINTAINER:=X-WRT <dev@x-wrt.com>
 PKG_LICENSE:=GPL-2.0
@@ -40,8 +40,9 @@ define Package/lte-modem-xwrt-csac/postinst
 #!/bin/sh
 
 if [ -z "$$IPKG_INSTROOT" ]; then
-  ( . /etc/uci-defaults/96-lte-setup )
-  rm -f /etc/uci-defaults/96-lte-setup
+  if [ -f /etc/uci-defaults/96-lte-setup ] && ( . /etc/uci-defaults/96-lte-setup ); then
+    rm -f /etc/uci-defaults/96-lte-setup
+  fi
 fi
 
 exit 0

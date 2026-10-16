@@ -10,11 +10,23 @@ uci -q batch <<-EOT
 	commit network
 	EOT
 
-[ x`uci get firewall.@zone[1].name 2>/dev/null` = xwan ] && {
-	wans="$(uci get firewall.@zone[1].network 2>/dev/null) ltewan"
+. /lib/functions.sh
+
+wan_zone=
+find_lte_wan_zone() {
+	local name
+	config_get name "$1" name
+	[ "$name" = "wan" ] && [ -z "$wan_zone" ] && wan_zone="$1"
+}
+
+config_load firewall
+config_foreach find_lte_wan_zone zone
+[ -n "$wan_zone" ] && {
+	config_get wans "$wan_zone" network
+	wans="$wans ltewan"
 	wans=$(for w in $wans; do echo $w; done | sort | uniq)
 	wans=`echo $wans`
-	uci set firewall.@zone[1].network="$wans"
+	uci set "firewall.$wan_zone.network=$wans"
 	uci commit firewall
 }
 

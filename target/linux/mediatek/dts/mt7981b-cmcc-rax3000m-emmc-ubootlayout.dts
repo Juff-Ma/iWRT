@@ -6,10 +6,10 @@
 / {
 	model = "CMCC RAX3000M eMMC (uboot layout)";
 	compatible = "cmcc,rax3000m-emmc-ubootlayout", "mediatek,mt7981";
+};
 
-	chosen {
-		bootargs-override = "root=PARTLABEL=rootfs rootwait rootfstype=squashfs,f2fs";
-	};
+&chosen {
+	bootargs-override = "root=PARTLABEL=rootfs rootwait rootfstype=squashfs,f2fs";
 };
 
 &mmc0 {

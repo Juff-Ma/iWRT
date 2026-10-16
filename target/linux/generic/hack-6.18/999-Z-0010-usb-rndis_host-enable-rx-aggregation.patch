@@ -5,10 +5,10 @@ Subject: [PATCH] usb: rndis_host: enable rx aggregation
 
 Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
 ---
- drivers/net/usb/rndis_host.c | 54 ++++++++++++++++++++++++------------
+ drivers/net/usb/rndis_host.c | 56 +++++++++++++++++++++++++------------
  drivers/net/usb/usbnet.c     |  2 +-
  include/linux/usb/usbnet.h   |  1 +
- 3 files changed, 39 insertions(+), 18 deletions(-)
+ 3 files changed, 40 insertions(+), 19 deletions(-)
 
 --- a/drivers/net/usb/rndis_host.c
 +++ b/drivers/net/usb/rndis_host.c
@@ -20,16 +20,16 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
  #include <linux/netdevice.h>
  #include <linux/etherdevice.h>
  #include <linux/ethtool.h>
-@@ -15,6 +16,8 @@
- #include <linux/usb/usbnet.h>
+@@ -16,6 +17,8 @@
  #include <linux/usb/rndis_host.h>
+ #include <linux/overflow.h>
  
 +static unsigned int rx_max_xfer_size = 16384;
 +module_param(rx_max_xfer_size, uint, 0600);
  
  /*
   * RNDIS is NDIS remoted over USB.  It's a MSFT variant of CDC ACM ... of
-@@ -344,6 +347,12 @@ generic_rndis_bind(struct usbnet *dev, s
+@@ -345,6 +348,12 @@ generic_rndis_bind(struct usbnet *dev, s
  
  	dev->rx_urb_size = dev->hard_mtu + (dev->maxpacket + 1);
  	dev->rx_urb_size &= ~(dev->maxpacket - 1);
@@ -42,9 +42,9 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
  	u.init->max_transfer_size = cpu_to_le32(dev->rx_urb_size);
  
  	net->netdev_ops = &rndis_netdev_ops;
-@@ -507,10 +516,17 @@ int rndis_rx_fixup(struct usbnet *dev, s
- 		struct sk_buff		*skb2;
+@@ -509,10 +518,17 @@ int rndis_rx_fixup(struct usbnet *dev, s
  		u32			msg_type, msg_len, data_offset, data_len;
+ 		u32			overflow_check;
  
 -		msg_type = le32_to_cpu(hdr->msg_type);
 -		msg_len = le32_to_cpu(hdr->msg_len);
@@ -64,7 +64,7 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
  
  		/* don't choke if we see oob, per-packet data, etc */
  		if (unlikely(msg_type != RNDIS_MSG_PACKET || skb->len < msg_len
-@@ -523,23 +539,27 @@ int rndis_rx_fixup(struct usbnet *dev, s
+@@ -527,23 +543,27 @@ int rndis_rx_fixup(struct usbnet *dev, s
  		}
  		skb_pull(skb, 8 + data_offset);
  
@@ -102,7 +102,7 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
  	}
  
  	/* caller will usbnet_skb_return the remaining packet */
-@@ -600,7 +620,7 @@ EXPORT_SYMBOL_GPL(rndis_tx_fixup);
+@@ -604,7 +624,7 @@ EXPORT_SYMBOL_GPL(rndis_tx_fixup);
  
  static const struct driver_info	rndis_info = {
  	.description =	"RNDIS device",
@@ -111,7 +111,7 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
  	.bind =		rndis_bind,
  	.unbind =	rndis_unbind,
  	.status =	rndis_status,
-@@ -610,7 +630,7 @@ static const struct driver_info	rndis_in
+@@ -614,7 +634,7 @@ static const struct driver_info	rndis_in
  
  static const struct driver_info	rndis_poll_status_info = {
  	.description =	"RNDIS device (poll status before control)",
@@ -120,7 +120,7 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
  	.data =		RNDIS_DRIVER_DATA_POLL_STATUS,
  	.bind =		rndis_bind,
  	.unbind =	rndis_unbind,
-@@ -621,7 +641,7 @@ static const struct driver_info	rndis_po
+@@ -625,7 +645,7 @@ static const struct driver_info	rndis_po
  
  static const struct driver_info	zte_rndis_info = {
  	.description =	"ZTE RNDIS device",
@@ -129,6 +129,15 @@ Signed-off-by: Chen Minqiang <ptpt52@gmail.com>
  	.data =		RNDIS_DRIVER_DATA_DST_MAC_FIXUP,
  	.bind =		zte_rndis_bind,
  	.unbind =	rndis_unbind,
+@@ -636,7 +656,7 @@ static const struct driver_info	zte_rndi
+ 
+ static const struct driver_info asr_rndis_info = {
+ 	.description =	"Asr RNDIS device",
+-	.flags =	FLAG_WWAN | FLAG_POINTTOPOINT | FLAG_FRAMING_RN | FLAG_NO_SETINT | FLAG_NOARP,
++	.flags =	FLAG_WWAN | FLAG_POINTTOPOINT | FLAG_FRAMING_RN | FLAG_NO_SETINT | FLAG_NOARP | FLAG_MULTI_PKT_RX,
+ 	.bind =		rndis_bind,
+ 	.unbind =	rndis_unbind,
+ 	.status =	rndis_status,
 --- a/drivers/net/usb/usbnet.c
 +++ b/drivers/net/usb/usbnet.c
 @@ -581,7 +581,7 @@ static inline int rx_process(struct usbn

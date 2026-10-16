@@ -35,8 +35,8 @@ struct mt753x_mapping {
 
 extern struct mt753x_mapping mt753x_defaults[];
 
-void mt753x_vlan_ctrl(struct gsw_mt753x *gsw, u32 cmd, u32 val);
-void mt753x_apply_vlan_config(struct gsw_mt753x *gsw);
+int mt753x_vlan_ctrl(struct gsw_mt753x *gsw, u32 cmd, u32 val);
+int mt753x_apply_vlan_config(struct gsw_mt753x *gsw);
 struct mt753x_mapping *mt753x_find_mapping(struct device_node *np);
 void mt753x_apply_mapping(struct gsw_mt753x *gsw, struct mt753x_mapping *map);
 #endif /* _MT753X_VLAN_H_ */

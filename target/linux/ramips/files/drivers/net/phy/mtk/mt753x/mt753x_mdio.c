@@ -37,38 +37,69 @@ static struct mt753x_sw_id *mt753x_sw_ids[] = {
 	&mt7531_id,
 };
 
-u32 mt753x_reg_read(struct gsw_mt753x *gsw, u32 reg)
+int mt753x_reg_read_checked(struct gsw_mt753x *gsw, u32 reg, u32 *value)
 {
-	u32 high, low;
+	int high, low, ret;
 
 	mutex_lock(&gsw->host_bus->mdio_lock);
 
-	gsw->host_bus->write(gsw->host_bus, gsw->smi_addr, 0x1f,
-	                     (reg & MT753X_REG_PAGE_ADDR_M) >> MT753X_REG_PAGE_ADDR_S);
+	ret = gsw->host_bus->write(gsw->host_bus, gsw->smi_addr, 0x1f,
+	                           (reg & MT753X_REG_PAGE_ADDR_M) >> MT753X_REG_PAGE_ADDR_S);
+	if (ret < 0)
+		goto out;
 
 	low = gsw->host_bus->read(gsw->host_bus, gsw->smi_addr,
 	                          (reg & MT753X_REG_ADDR_M) >> MT753X_REG_ADDR_S);
+	if (low < 0) {
+		ret = low;
+		goto out;
+	}
 
 	high = gsw->host_bus->read(gsw->host_bus, gsw->smi_addr, 0x10);
+	if (high < 0) {
+		ret = high;
+		goto out;
+	}
 
+	*value = ((u32)high << 16) | (low & 0xffff);
+	ret = 0;
+out:
 	mutex_unlock(&gsw->host_bus->mdio_lock);
 
-	return (high << 16) | (low & 0xffff);
+	return ret;
 }
 
-void mt753x_reg_write(struct gsw_mt753x *gsw, u32 reg, u32 val)
+u32 mt753x_reg_read(struct gsw_mt753x *gsw, u32 reg)
 {
+	u32 value = ~0U;
+
+	/* Legacy callers have no separate error return. */
+	mt753x_reg_read_checked(gsw, reg, &value);
+	return value;
+}
+
+int mt753x_reg_write(struct gsw_mt753x *gsw, u32 reg, u32 val)
+{
+	int ret;
+
 	mutex_lock(&gsw->host_bus->mdio_lock);
 
-	gsw->host_bus->write(gsw->host_bus, gsw->smi_addr, 0x1f,
-	                     (reg & MT753X_REG_PAGE_ADDR_M) >> MT753X_REG_PAGE_ADDR_S);
+	ret = gsw->host_bus->write(gsw->host_bus, gsw->smi_addr, 0x1f,
+	                           (reg & MT753X_REG_PAGE_ADDR_M) >> MT753X_REG_PAGE_ADDR_S);
+	if (ret < 0)
+		goto out;
 
-	gsw->host_bus->write(gsw->host_bus, gsw->smi_addr,
-	                     (reg & MT753X_REG_ADDR_M) >> MT753X_REG_ADDR_S, val & 0xffff);
+	ret = gsw->host_bus->write(gsw->host_bus, gsw->smi_addr,
+	                           (reg & MT753X_REG_ADDR_M) >> MT753X_REG_ADDR_S, val & 0xffff);
+	if (ret < 0)
+		goto out;
 
-	gsw->host_bus->write(gsw->host_bus, gsw->smi_addr, 0x10, val >> 16);
+	ret = gsw->host_bus->write(gsw->host_bus, gsw->smi_addr, 0x10, val >> 16);
 
+out:
 	mutex_unlock(&gsw->host_bus->mdio_lock);
+
+	return ret;
 }
 
 /* Indirect MDIO clause 22/45 access */
@@ -82,7 +113,9 @@ static int mt753x_mii_rw(struct gsw_mt753x *gsw, int phy, int reg, u16 data,
 	timeout_us = 100000;
 	timeout = ktime_add_us(ktime_get(), timeout_us);
 	while (1) {
-		val = mt753x_reg_read(gsw, PHY_IAC);
+		ret = mt753x_reg_read_checked(gsw, PHY_IAC, &val);
+		if (ret < 0)
+			return ret;
 
 		if ((val & PHY_ACS_ST) == 0)
 			break;
@@ -99,12 +132,16 @@ static int mt753x_mii_rw(struct gsw_mt753x *gsw, int phy, int reg, u16 data,
 	if (cmd == MDIO_CMD_WRITE || cmd == MDIO_CMD_ADDR)
 		val |= data & MDIO_RW_DATA_M;
 
-	mt753x_reg_write(gsw, PHY_IAC, val | PHY_ACS_ST);
+	ret = mt753x_reg_write(gsw, PHY_IAC, val | PHY_ACS_ST);
+	if (ret < 0)
+		return ret;
 
 	timeout_us = 100000;
 	timeout = ktime_add_us(ktime_get(), timeout_us);
 	while (1) {
-		val = mt753x_reg_read(gsw, PHY_IAC);
+		ret = mt753x_reg_read_checked(gsw, PHY_IAC, &val);
+		if (ret < 0)
+			return ret;
 
 		if ((val & PHY_ACS_ST) == 0)
 			break;
@@ -114,7 +151,9 @@ static int mt753x_mii_rw(struct gsw_mt753x *gsw, int phy, int reg, u16 data,
 	}
 
 	if (cmd == MDIO_CMD_READ || cmd == MDIO_CMD_READ_C45) {
-		val = mt753x_reg_read(gsw, PHY_IAC);
+		ret = mt753x_reg_read_checked(gsw, PHY_IAC, &val);
+		if (ret < 0)
+			return ret;
 		ret = val & MDIO_RW_DATA_M;
 	}
 
@@ -135,14 +174,18 @@ int mt753x_mii_read(struct gsw_mt753x *gsw, int phy, int reg)
 	return val;
 }
 
-void mt753x_mii_write(struct gsw_mt753x *gsw, int phy, int reg, u16 val)
+int mt753x_mii_write(struct gsw_mt753x *gsw, int phy, int reg, u16 val)
 {
+	int ret;
+
 	if (phy < MT753X_NUM_PHYS)
 		phy = (gsw->phy_base + phy) & MT753X_SMI_ADDR_MASK;
 
 	mutex_lock(&gsw->mii_lock);
-	mt753x_mii_rw(gsw, phy, reg, val, MDIO_CMD_WRITE, MDIO_ST_C22);
+	ret = mt753x_mii_rw(gsw, phy, reg, val, MDIO_CMD_WRITE, MDIO_ST_C22);
 	mutex_unlock(&gsw->mii_lock);
+
+	return ret;
 }
 
 int mt753x_mmd_read(struct gsw_mt753x *gsw, int addr, int devad, u16 reg)
@@ -153,81 +196,109 @@ int mt753x_mmd_read(struct gsw_mt753x *gsw, int addr, int devad, u16 reg)
 		addr = (gsw->phy_base + addr) & MT753X_SMI_ADDR_MASK;
 
 	mutex_lock(&gsw->mii_lock);
-	mt753x_mii_rw(gsw, addr, devad, reg, MDIO_CMD_ADDR, MDIO_ST_C45);
+	val = mt753x_mii_rw(gsw, addr, devad, reg, MDIO_CMD_ADDR, MDIO_ST_C45);
+	if (val < 0)
+		goto out;
 	val = mt753x_mii_rw(gsw, addr, devad, 0, MDIO_CMD_READ_C45,
 	                    MDIO_ST_C45);
+out:
 	mutex_unlock(&gsw->mii_lock);
 
 	return val;
 }
 
-void mt753x_mmd_write(struct gsw_mt753x *gsw, int addr, int devad, u16 reg,
+int mt753x_mmd_write(struct gsw_mt753x *gsw, int addr, int devad, u16 reg,
                       u16 val)
 {
+	int ret;
+
 	if (addr < MT753X_NUM_PHYS)
 		addr = (gsw->phy_base + addr) & MT753X_SMI_ADDR_MASK;
 
 	mutex_lock(&gsw->mii_lock);
-	mt753x_mii_rw(gsw, addr, devad, reg, MDIO_CMD_ADDR, MDIO_ST_C45);
-	mt753x_mii_rw(gsw, addr, devad, val, MDIO_CMD_WRITE, MDIO_ST_C45);
+	ret = mt753x_mii_rw(gsw, addr, devad, reg, MDIO_CMD_ADDR, MDIO_ST_C45);
+	if (ret < 0)
+		goto out;
+	ret = mt753x_mii_rw(gsw, addr, devad, val, MDIO_CMD_WRITE, MDIO_ST_C45);
+out:
 	mutex_unlock(&gsw->mii_lock);
+
+	return ret;
 }
 
 int mt753x_mmd_ind_read(struct gsw_mt753x *gsw, int addr, int devad, u16 reg)
 {
-	u16 val;
+	int val;
 
 	if (addr < MT753X_NUM_PHYS)
 		addr = (gsw->phy_base + addr) & MT753X_SMI_ADDR_MASK;
 
 	mutex_lock(&gsw->mii_lock);
 
-	mt753x_mii_rw(gsw, addr, MII_MMD_ACC_CTL_REG,
-	              (MMD_ADDR << MMD_CMD_S) |
-	              ((devad << MMD_DEVAD_S) & MMD_DEVAD_M),
-	              MDIO_CMD_WRITE, MDIO_ST_C22);
+	val = mt753x_mii_rw(gsw, addr, MII_MMD_ACC_CTL_REG,
+	                    (MMD_ADDR << MMD_CMD_S) |
+	                    ((devad << MMD_DEVAD_S) & MMD_DEVAD_M),
+	                    MDIO_CMD_WRITE, MDIO_ST_C22);
+	if (val < 0)
+		goto out;
 
-	mt753x_mii_rw(gsw, addr, MII_MMD_ADDR_DATA_REG, reg,
-	              MDIO_CMD_WRITE, MDIO_ST_C22);
+	val = mt753x_mii_rw(gsw, addr, MII_MMD_ADDR_DATA_REG, reg,
+	                    MDIO_CMD_WRITE, MDIO_ST_C22);
+	if (val < 0)
+		goto out;
 
-	mt753x_mii_rw(gsw, addr, MII_MMD_ACC_CTL_REG,
-	              (MMD_DATA << MMD_CMD_S) |
-	              ((devad << MMD_DEVAD_S) & MMD_DEVAD_M),
-	              MDIO_CMD_WRITE, MDIO_ST_C22);
+	val = mt753x_mii_rw(gsw, addr, MII_MMD_ACC_CTL_REG,
+	                    (MMD_DATA << MMD_CMD_S) |
+	                    ((devad << MMD_DEVAD_S) & MMD_DEVAD_M),
+	                    MDIO_CMD_WRITE, MDIO_ST_C22);
+	if (val < 0)
+		goto out;
 
 	val = mt753x_mii_rw(gsw, addr, MII_MMD_ADDR_DATA_REG, 0,
 	                    MDIO_CMD_READ, MDIO_ST_C22);
 
+out:
 	mutex_unlock(&gsw->mii_lock);
 
 	return val;
 }
 
-void mt753x_mmd_ind_write(struct gsw_mt753x *gsw, int addr, int devad, u16 reg,
+int mt753x_mmd_ind_write(struct gsw_mt753x *gsw, int addr, int devad, u16 reg,
                           u16 val)
 {
+	int ret;
+
 	if (addr < MT753X_NUM_PHYS)
 		addr = (gsw->phy_base + addr) & MT753X_SMI_ADDR_MASK;
 
 	mutex_lock(&gsw->mii_lock);
 
-	mt753x_mii_rw(gsw, addr, MII_MMD_ACC_CTL_REG,
-	              (MMD_ADDR << MMD_CMD_S) |
-	              ((devad << MMD_DEVAD_S) & MMD_DEVAD_M),
+	ret = mt753x_mii_rw(gsw, addr, MII_MMD_ACC_CTL_REG,
+	                    (MMD_ADDR << MMD_CMD_S) |
+	                    ((devad << MMD_DEVAD_S) & MMD_DEVAD_M),
+	                    MDIO_CMD_WRITE, MDIO_ST_C22);
+	if (ret < 0)
+		goto out;
+
+	ret = mt753x_mii_rw(gsw, addr, MII_MMD_ADDR_DATA_REG, reg,
+	                    MDIO_CMD_WRITE, MDIO_ST_C22);
+	if (ret < 0)
+		goto out;
+
+	ret = mt753x_mii_rw(gsw, addr, MII_MMD_ACC_CTL_REG,
+	                    (MMD_DATA << MMD_CMD_S) |
+	                    ((devad << MMD_DEVAD_S) & MMD_DEVAD_M),
+	                    MDIO_CMD_WRITE, MDIO_ST_C22);
+	if (ret < 0)
+		goto out;
+
+	ret = mt753x_mii_rw(gsw, addr, MII_MMD_ADDR_DATA_REG, val,
 	              MDIO_CMD_WRITE, MDIO_ST_C22);
 
-	mt753x_mii_rw(gsw, addr, MII_MMD_ADDR_DATA_REG, reg,
-	              MDIO_CMD_WRITE, MDIO_ST_C22);
-
-	mt753x_mii_rw(gsw, addr, MII_MMD_ACC_CTL_REG,
-	              (MMD_DATA << MMD_CMD_S) |
-	              ((devad << MMD_DEVAD_S) & MMD_DEVAD_M),
-	              MDIO_CMD_WRITE, MDIO_ST_C22);
-
-	mt753x_mii_rw(gsw, addr, MII_MMD_ADDR_DATA_REG, val,
-	              MDIO_CMD_WRITE, MDIO_ST_C22);
-
+out:
 	mutex_unlock(&gsw->mii_lock);
+
+	return ret;
 }
 
 static inline int mt753x_get_duplex(const struct device_node *np)
@@ -290,7 +361,7 @@ static void mt753x_load_port_cfg(struct gsw_mt753x *gsw)
 
 			if (of_property_read_u32(fixed_link_node, "speed",
 			                         &speed)) {
-				speed = 0;
+				of_node_put(fixed_link_node);
 				continue;
 			}
 
@@ -387,15 +458,18 @@ static int mt753x_hw_reset(struct gsw_mt753x *gsw)
 	mcm = of_property_read_bool(np, "mediatek,mcm");
 	if (mcm) {
 		rstc = devm_reset_control_get(gsw->dev, "mcm");
-		ret = IS_ERR(rstc);
 		if (IS_ERR(rstc)) {
 			dev_err(gsw->dev, "Missing reset ctrl of switch\n");
-			return ret;
+			return PTR_ERR(rstc);
 		}
 
-		reset_control_assert(rstc);
+		ret = reset_control_assert(rstc);
+		if (ret)
+			return ret;
 		msleep(30);
-		reset_control_deassert(rstc);
+		ret = reset_control_deassert(rstc);
+		if (ret)
+			return ret;
 
 		gsw->reset_pin = -1;
 		return 0;
@@ -404,7 +478,7 @@ static int mt753x_hw_reset(struct gsw_mt753x *gsw)
 	gsw->reset_pin = of_get_named_gpio(np, "reset-gpios", 0);
 	if (gsw->reset_pin < 0) {
 		dev_err(gsw->dev, "Missing reset pin of switch\n");
-		return ret;
+		return gsw->reset_pin;
 	}
 
 	ret = devm_gpio_request_one(gsw->dev, gsw->reset_pin, GPIOF_OUT_INIT_HIGH, "mt753x-reset");
@@ -450,22 +524,24 @@ static int mt753x_probe(struct platform_device *pdev)
 		return -EINVAL;
 
 	mdio_bus = of_mdio_find_bus(mdio);
+	of_node_put(mdio);
 	if (!mdio_bus)
 		return -EPROBE_DEFER;
 
 	gsw = devm_kzalloc(&pdev->dev, sizeof(struct gsw_mt753x), GFP_KERNEL);
-	if (!gsw)
-		return -ENOMEM;
+	if (!gsw) {
+		ret = -ENOMEM;
+		goto put_bus;
+	}
 
 	gsw->host_bus = mdio_bus;
 	gsw->dev = &pdev->dev;
 	mutex_init(&gsw->mii_lock);
-#ifdef CONFIG_SWCONFIG
 	mutex_init(&gsw->reg_mutex);
-#endif
 
 	/* Switch hard reset */
-	if (mt753x_hw_reset(gsw))
+	ret = mt753x_hw_reset(gsw);
+	if (ret)
 		goto fail;
 
 	/* Fetch the SMI address dirst */
@@ -485,7 +561,10 @@ static int mt753x_probe(struct platform_device *pdev)
 
 	/* Check for valid switch and then initialize */
 	for (i = 0; i < ARRAY_SIZE(mt753x_sw_ids); i++) {
-		if (!mt753x_sw_ids[i]->detect(gsw, &rev)) {
+		ret = mt753x_sw_ids[i]->detect(gsw, &rev);
+		if (ret < 0)
+			goto fail;
+		if (!ret) {
 			sw = mt753x_sw_ids[i];
 
 			gsw->name = rev.name;
@@ -505,12 +584,17 @@ static int mt753x_probe(struct platform_device *pdev)
 
 	if (i >= ARRAY_SIZE(mt753x_sw_ids)) {
 		dev_err(gsw->dev, "No mt753x switch found\n");
+		ret = -EINVAL;
 		goto fail;
 	}
 
 	INIT_WORK(&gsw->irq_worker, mt753x_irq_worker);
 
 	gsw->irq = platform_get_irq(pdev, 0);
+	if (gsw->irq == -EPROBE_DEFER) {
+		ret = gsw->irq;
+		goto fail;
+	}
 	if (gsw->irq >= 0) {
 		ret = devm_request_irq(gsw->dev, gsw->irq, mt753x_irq_handler,
 		                       0, dev_name(gsw->dev), gsw);
@@ -523,30 +607,49 @@ static int mt753x_probe(struct platform_device *pdev)
 		disable_irq(gsw->irq);
 	}
 
+#ifdef CONFIG_SWCONFIG
+	ret = mt753x_swconfig_init(gsw);
+	if (ret)
+		goto fail_irq;
+#endif
+
+	if (sw->post_init) {
+		ret = sw->post_init(gsw);
+		if (ret)
+			goto fail_swconfig;
+	}
+
+	if (gsw->irq >= 0) {
+		ret = mt753x_irq_enable(gsw);
+		if (ret < 0)
+			goto fail_swconfig;
+	}
+
 	platform_set_drvdata(pdev, gsw);
 
 	mt753x_add_gsw(gsw);
 
-#ifdef CONFIG_SWCONFIG
-	mt753x_swconfig_init(gsw);
-#endif
-
-	if (sw->post_init)
-		sw->post_init(gsw);
-
-	if (gsw->irq >= 0) {
-		mt753x_irq_enable(gsw);
+	if (gsw->irq >= 0)
 		enable_irq(gsw->irq);
-	}
 
 	return 0;
 
-fail:
+fail_swconfig:
 #ifdef CONFIG_SWCONFIG
-	mutex_destroy(&gsw->reg_mutex);
+	mt753x_swconfig_destroy(gsw);
+fail_irq:
 #endif
+	if (gsw->irq >= 0) {
+		/* The IRQ was disabled before completing hardware initialization. */
+		cancel_work_sync(&gsw->irq_worker);
+		devm_free_irq(gsw->dev, gsw->irq, gsw);
+	}
+fail:
+	mutex_destroy(&gsw->reg_mutex);
 	mutex_destroy(&gsw->mii_lock);
 	devm_kfree(&pdev->dev, gsw);
+put_bus:
+	put_device(&mdio_bus->dev);
 
 	return ret;
 }
@@ -559,25 +662,27 @@ static int mt753x_remove(struct platform_device *pdev)
 {
 	struct gsw_mt753x *gsw = platform_get_drvdata(pdev);
 
+	/* Drain Netlink users before tearing down the switch resources. */
+	mt753x_remove_gsw(gsw);
+
 	if (gsw->irq >= 0) {
+		disable_irq(gsw->irq);
 		cancel_work_sync(&gsw->irq_worker);
-		free_irq(gsw->irq, gsw);
+		devm_free_irq(gsw->dev, gsw->irq, gsw);
 	}
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,0,0)
 	if (gsw->reset_pin >= 0)
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,0,0)
-		gpio_free(gsw->reset_pin);
-#else
 		devm_gpio_free(&pdev->dev, gsw->reset_pin);
 #endif
 
 #ifdef CONFIG_SWCONFIG
 	mt753x_swconfig_destroy(gsw);
-	mutex_destroy(&gsw->reg_mutex);
 #endif
+	mutex_destroy(&gsw->reg_mutex);
 	mutex_destroy(&gsw->mii_lock);
 
-	mt753x_remove_gsw(gsw);
+	put_device(&gsw->host_bus->dev);
 
 	platform_set_drvdata(pdev, NULL);
 
@@ -613,8 +718,12 @@ static int __init mt753x_init(void)
 
 	INIT_LIST_HEAD(&mt753x_devs);
 	ret = platform_driver_register(&mt753x_driver);
+	if (ret)
+		return ret;
 
-	mt753x_nl_init();
+	ret = mt753x_nl_init();
+	if (ret)
+		platform_driver_unregister(&mt753x_driver);
 
 	return ret;
 }

@@ -35,9 +35,20 @@ jiorouter_initial_setup()
 	fi
 
 	ubidetach -m "$mtdnum" 2>/dev/null
-	ubiformat /dev/mtd$mtdnum -y
-	ubiattach -m "$mtdnum"
-	ubimkvol /dev/ubi0 -n 0 -N u-boot-env -s 0x80000
+	ubiformat /dev/mtd$mtdnum -y || exit 1
+	ubiattach -m "$mtdnum" || exit 1
+
+	local ubidev="$(nand_find_ubi ubi)"
+	[ -n "$ubidev" ] || { echo "cannot attach ubi"; exit 1; }
+
+	if ! ubimkvol /dev/$ubidev -n 0 -N u-boot-env -s 0x80000; then
+		echo "failed to create u-boot-env volume - aborting"
+		exit 1
+	fi
+
+	local envdev="$(nand_find_volume "$ubidev" u-boot-env)"
+	[ -n "$envdev" ] || { echo "cannot find u-boot-env volume - aborting"; exit 1; }
+	echo "/dev/$envdev 0x0 0x80000 0x1f000 5" > /etc/fw_env.config
 
 	# Set boot arguments in freshly created U-Boot environment
 	fw_setenv bootcmd 'ubi read 46000000 kernel;fdt addr $(fdtcontroladdr);fdt rm /signature;bootm 0x46000000'
@@ -144,12 +155,65 @@ mtk_dual_boot_flash_both_slots() {
 	nand_do_flash_file "$1" || nand_do_upgrade_failed
 }
 
+cmcc_rax3000m_emmc_check_image()
+{
+	local tar_file="$1"
+	local gz= members board_dir member size
+
+	[ "$(identify_magic_long "$(get_magic_long "$tar_file" cat)")" = "gzip" ] && gz=z
+	members=$(tar t${gz}f "$tar_file" 2>/dev/null) || return 1
+	board_dir=$(printf '%s\n' "$members" | grep -m 1 '^sysupgrade-.*/$')
+	case "$board_dir" in
+	sysupgrade-cmcc_rax3000m-emmc-ubootlayout/|sysupgrade-cmcc,rax3000m-emmc-ubootlayout/|\
+	sysupgrade-cmcc_rax3000m-emmc-ubootmod/|sysupgrade-cmcc,rax3000m-emmc-ubootmod/)
+		;;
+	*)
+		return 1
+		;;
+	esac
+
+	for member in CONTROL kernel root; do
+		[ "$(printf '%s\n' "$members" | grep -Fxc "$board_dir$member")" -eq 1 ] || return 1
+		size=$(set -o pipefail; tar x${gz}Of "$tar_file" "$board_dir$member" 2>/dev/null | wc -c) || return 1
+		[ "$size" -gt 0 ] || return 1
+	done
+
+	return 0
+}
+
+tenbay_mmc_check_image()
+{
+	local tar_file="$1"
+	local gz= members board_dir member size
+
+	[ "$(identify_magic_long "$(get_magic_long "$tar_file" cat)")" = "gzip" ] && gz=z
+	members=$(tar t${gz}f "$tar_file" 2>/dev/null) || return 1
+	board_dir=$(printf '%s\n' "$members" | grep -m 1 '^sysupgrade-.*/$')
+	case "$board_dir" in
+	sysupgrade-tenbay_wr3000k-gsw-emmc-nor/|sysupgrade-tenbay,wr3000k-gsw-emmc-nor/)
+		;;
+	*)
+		return 1
+		;;
+	esac
+
+	for member in CONTROL kernel root; do
+		[ "$(printf '%s\n' "$members" | grep -Fxc "$board_dir$member")" -eq 1 ] || return 1
+		size=$(set -o pipefail; tar x${gz}Of "$tar_file" "$board_dir$member" 2>/dev/null | wc -c) || return 1
+		[ "$size" -gt 0 ] || return 1
+	done
+
+	return 0
+}
+
 tenbay_mmc_do_upgrade_dual_boot()
 {
 	local tar_file="$1"
 	local kernel_dev=
 	local rootfs_dev=
 	local current_sys=0
+
+	tenbay_mmc_check_image "$tar_file" || exit 1
 
 	CI_KERNPART=kernel
 	CI_ROOTPART=rootfs
@@ -170,25 +234,31 @@ tenbay_mmc_do_upgrade_dual_boot()
 		CI_ROOTPART=rootfs_1
 	fi
 
-	[ -z "${rootfs_dev}" ] && return 1
-	[ -z "${kernel_dev}" ] && return 1
+	[ -z "${rootfs_dev}" ] && exit 1
+	[ -z "${kernel_dev}" ] && exit 1
 	fw_printenv env_init &>/dev/null || {
 		v "Failed to fetch env, please check /etc/fw_env.config"
-		return 1
+		exit 1
 	}
-
-	#Switch sys to boot
-	if [ "$current_sys" = "1" ]; then
-		fw_setenv bootargs "console=ttyS0,115200n1 loglevel=8 earlycon=uart8250,mmio32,0x11002000 root=PARTLABEL=rootfs rootfstype=squashfs,f2fs"
-	else
-		fw_setenv bootargs "console=ttyS0,115200n1 loglevel=8 earlycon=uart8250,mmio32,0x11002000 root=PARTLABEL=rootfs_1 rootfstype=squashfs,f2fs"
-	fi
-	sync
 
 	rootdev="${rootfs_dev##*/}"
 	rootdev="${rootdev%p[0-9]*}"
 	CI_ROOTDEV=${rootdev}
-	emmc_do_upgrade "${tar_file}"
+	export EMMC_KERN_DEV="$kernel_dev"
+	export EMMC_ROOT_DEV="$rootfs_dev"
+	emmc_upgrade_tar "$tar_file" || exit 1
+	if [ -n "$UPGRADE_BACKUP" ]; then
+		emmc_copy_config || exit 1
+	fi
+	sync || exit 1
+
+	# Switch slots after the image and optional backup have been written and synced.
+	if [ "$current_sys" = "1" ]; then
+		fw_setenv bootargs "console=ttyS0,115200n1 loglevel=8 earlycon=uart8250,mmio32,0x11002000 root=PARTLABEL=rootfs rootfstype=squashfs,f2fs" || exit 1
+	else
+		fw_setenv bootargs "console=ttyS0,115200n1 loglevel=8 earlycon=uart8250,mmio32,0x11002000 root=PARTLABEL=rootfs_1 rootfstype=squashfs,f2fs" || exit 1
+	fi
+	sync
 }
 
 tenbay_dualboot_fixup()
@@ -197,18 +267,32 @@ tenbay_dualboot_fixup()
 
 	if ! fw_printenv -n boot_from &>/dev/null; then
 		echo "unable to read uboot-env"
-		return 1
+		exit 1
 	fi
 
-	fw_setenv boot_from ubi
+	fw_setenv boot_from ubi || exit 1
 }
 
 platform_do_upgrade() {
 	local board=$(board_name)
 
 	case "$board" in
+	cmcc,rax3000m-emmc-ubootlayout)
+		cmcc_rax3000m_emmc_check_image "$1" || exit 1
+		CI_KERNPART="kernel"
+		CI_ROOTPART="rootfs"
+		[ -n "$EMMC_KERN_DEV" ] || EMMC_KERN_DEV="$(find_mmc_part "$CI_KERNPART" "$CI_ROOTDEV")"
+		[ -n "$EMMC_ROOT_DEV" ] || EMMC_ROOT_DEV="$(find_mmc_part "$CI_ROOTPART" "$CI_ROOTDEV")"
+		[ -b "$EMMC_KERN_DEV" ] && [ -b "$EMMC_ROOT_DEV" ] || {
+			echo "Missing kernel or rootfs block device"
+			exit 1
+		}
+		export EMMC_KERN_DEV EMMC_ROOT_DEV
+		emmc_upgrade_tar "$1" || exit 1
+		;;
 	abt,asr3000|\
 	acer,predator-w6x-ubootmod|\
+	asus,rt-ax59u-ubi|\
 	asus,zenwifi-bt8-ubootmod|\
 	bananapi,bpi-r3|\
 	bananapi,bpi-r3-mini|\
@@ -216,10 +300,12 @@ platform_do_upgrade() {
 	bananapi,bpi-r4-2g5|\
 	bananapi,bpi-r4-poe|\
 	bananapi,bpi-r4-lite|\
+	bananapi,bpi-r4-pro-4e|\
 	bananapi,bpi-r4-pro-8x|\
 	bazis,ax3000wm|\
 	cmcc,a10-ubootmod|\
 	cmcc,rax3000m|\
+	comfast,cf-wa933-ubi|\
 	comfast,cf-wr632ax-ubi|\
 	comfast,cf-wr632ax-ubootmod|\
 	creatlentem,clt-r30b1-ubi|\
@@ -258,6 +344,8 @@ platform_do_upgrade() {
 	snr,snr-cpe-ax2|\
 	teralink,tl3020-256mb|\
 	tplink,be450-ubi|\
+	tplink,tl-7dr7230*|\
+	tplink,tl-7dr7250*|\
 	tplink,tl-xdr4288|\
 	tplink,tl-xdr6086|\
 	tplink,tl-xdr6088|\
@@ -292,7 +380,8 @@ platform_do_upgrade() {
 	smartrg,sdg-8732|\
 	smartrg,sdg-8733|\
 	smartrg,sdg-8733a|\
-	smartrg,sdg-8734)
+	smartrg,sdg-8734|\
+	smartrg,sdg-9000)
 		CI_KERNPART="kernel"
 		CI_ROOTPART="rootfs"
 		emmc_do_upgrade "$1"
@@ -349,7 +438,8 @@ platform_do_upgrade() {
 	cudy,wr3000p-v1|\
 	huasifei,wh3000-pro-nand|\
 	huasifei,wh3000r-nand|\
-	jiorouter,ax6000-jidu6101)
+	jiorouter,ax6000-jidu6101|\
+	jiorouter,ax6000-jidu6j01)
 		CI_UBIPART="ubi"
 		nand_do_upgrade "$1"
 		;;
@@ -466,8 +556,13 @@ platform_check_image() {
 	[ "$#" -gt 1 ] && return 1
 
 	case "$board" in
+	cmcc,rax3000m-emmc-ubootlayout)
+		cmcc_rax3000m_emmc_check_image "$1"
+		return $?
+		;;
 	abt,asr3000|\
 	acer,predator-w6x-ubootmod|\
+	asus,rt-ax59u-ubi|\
 	asus,zenwifi-bt8-ubootmod|\
 	bananapi,bpi-r3|\
 	bananapi,bpi-r3-mini|\
@@ -475,10 +570,12 @@ platform_check_image() {
 	bananapi,bpi-r4-2g5|\
 	bananapi,bpi-r4-poe|\
 	bananapi,bpi-r4-lite|\
+	bananapi,bpi-r4-pro-4e|\
 	bananapi,bpi-r4-pro-8x|\
 	bazis,ax3000wm|\
 	cmcc,a10-ubootmod|\
 	cmcc,rax3000m|\
+	comfast,cf-wa933-ubi|\
 	comfast,cf-wr632ax-ubi|\
 	comfast,cf-wr632ax-ubootmod|\
 	creatlentem,clt-r30b1-ubi|\
@@ -511,6 +608,8 @@ platform_check_image() {
 	routerich,ax3000-ubootmod|\
 	teralink,tl3020-256mb|\
 	tplink,be450-ubi|\
+	tplink,tl-7dr7230*|\
+	tplink,tl-7dr7250*|\
 	tplink,tl-xdr4288|\
 	tplink,tl-xdr6086|\
 	tplink,tl-xdr6088|\
@@ -523,9 +622,17 @@ platform_check_image() {
 		fit_check_image "$1"
 		return $?
 		;;
-	cmcc,rax3000m-emmc-ubootlayout|\
-	tenbay,ms3000k|\
-	tenbay,wr3000k-gsw-emmc-nor|\
+	tenbay,wr3000k-gsw-emmc-nor)
+		tenbay_mmc_check_image "$1"
+		return $?
+		;;
+	tenbay,ms3000k)
+		[ "$(get_magic_long "$1")" = "d00dfeed" ] || {
+			echo "Invalid image type."
+			return 1
+		}
+		return 0
+		;;
 	tenda,ax12-pro-v2|\
 	tenda,ax12l-pro)
 		return 0
@@ -555,12 +662,17 @@ platform_check_image() {
 
 platform_copy_config() {
 	case "$(board_name)" in
+	tenbay,wr3000k-gsw-emmc-nor)
+		# The backup was saved before switching the boot slot.
+		return 0
+		;;
 	bananapi,bpi-r3|\
 	bananapi,bpi-r3-mini|\
 	bananapi,bpi-r4|\
 	bananapi,bpi-r4-2g5|\
 	bananapi,bpi-r4-poe|\
 	bananapi,bpi-r4-lite|\
+	bananapi,bpi-r4-pro-4e|\
 	bananapi,bpi-r4-pro-8x|\
 	cmcc,rax3000m|\
 	gatonetworks,gdsp|\
@@ -595,7 +707,7 @@ platform_copy_config() {
 	smartrg,sdg-8733|\
 	smartrg,sdg-8733a|\
 	smartrg,sdg-8734|\
-	tenbay,wr3000k-gsw-emmc-nor|\
+	smartrg,sdg-9000|\
 	ubnt,unifi-6-plus)
 		emmc_copy_config
 		;;
@@ -630,7 +742,8 @@ platform_pre_upgrade() {
 		[ -z "$delay" ] || [ "$delay" -eq "0" ] && \
 			fw_setenv bootmenu_delay 3
 		;;
-	jiorouter,ax6000-jidu6101)
+	jiorouter,ax6000-jidu6101|\
+	jiorouter,ax6000-jidu6j01)
 		jiorouter_initial_setup
 		;;
 	xiaomi,mi-router-ax3000t|\

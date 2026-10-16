@@ -50,12 +50,14 @@ norplusemmc_check_image() {
 norplusemmc_copy_config() {
 	local partdev parttype=ext4
 
-	if export_partdevice partdev 1; then
-		part_magic_fat "/dev/$partdev" && parttype=vfat
-		mount -t $parttype -o rw,noatime "/dev/$partdev" /mnt
-		cp -af "$UPGRADE_BACKUP" "/mnt/$BACKUP_FILE"
+	export_partdevice partdev 1 || return 1
+	part_magic_fat "/dev/$partdev" && parttype=vfat
+	mount -t $parttype -o rw,noatime "/dev/$partdev" /mnt || return 1
+	cp -af "$UPGRADE_BACKUP" "/mnt/$BACKUP_FILE" || {
 		umount /mnt
-	fi
+		return 1
+	}
+	umount /mnt
 }
 
 norplusemmc_do_upgrade() {
@@ -78,7 +80,7 @@ norplusemmc_do_upgrade() {
 	kernel_length=$( (tar xf "$tar_file" ${board_dir}/kernel -O | wc -c) 2> /dev/null)
 	[ "$kernel_length" != 0 -a -n "$kernel_mtd" ] && {
 		v "Writing kernel to $CI_KERNPART"
-		tar xf "$tar_file" ${board_dir}/kernel -O | mtd write - $CI_KERNPART
+		tar xf "$tar_file" ${board_dir}/kernel -O | mtd write - $CI_KERNPART || return 1
 	}
 
 	if [ "$UPGRADE_OPT_SAVE_PARTITIONS" = "1" ]; then
@@ -96,12 +98,12 @@ norplusemmc_do_upgrade() {
 	fi
 
 	if [ -n "$diff" ]; then
-		tar xf "$tar_file" ${board_dir}/root -O | zcat | dd of="/dev/$diskdev" bs=4096 conv=fsync
+		tar xf "$tar_file" ${board_dir}/root -O | zcat | dd of="/dev/$diskdev" bs=4096 conv=fsync || return 1
 
 		# Separate removal and addtion is necessary; otherwise, partition 1
 		# will be missing if it overlaps with the old partition 2
-		partx -d - "/dev/$diskdev"
-		partx -a - "/dev/$diskdev"
+		partx -d - "/dev/$diskdev" || return 1
+		partx -a - "/dev/$diskdev" || return 1
 
 		return 0
 	fi
@@ -110,9 +112,10 @@ norplusemmc_do_upgrade() {
 	while read part start size; do
 		if export_partdevice partdev $part; then
 			v "Writing image to /dev/$partdev..."
-			tar xf "$tar_file" ${board_dir}/root -O | zcat | dd of="/dev/$partdev" ibs=512 obs=1M skip="$start" count="$size" conv=fsync
+			tar xf "$tar_file" ${board_dir}/root -O | zcat | dd of="/dev/$partdev" ibs=512 obs=1M skip="$start" count="$size" conv=fsync || return 1
 		else
-			v "Unable to find partition $part device, skipped."
+			v "Unable to find partition $part device, upgrade aborted."
+			return 1
 		fi
 	done < /tmp/partmap.image
 

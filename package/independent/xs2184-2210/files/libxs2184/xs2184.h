@@ -60,7 +60,7 @@ enum {
 #define ARRAY_SIZE(arr)        (sizeof(arr)/sizeof((arr)[0]))
 #endif
 
-int open_chip(u8 file, u8 chip_addr);
+int open_chip(int file, u8 chip_addr);
 int enable_port(char port_num);
 int disable_port(char port_num);
 

@@ -6,9 +6,16 @@ define Build/an7583-preloader
 endef
 
 define Build/an7583-bl31-uboot
+  @if [ -f "$(STAGING_DIR_IMAGE)/an7583_$1-u-boot.lzma" ]; then \
+    UBOOT_BIN="$(STAGING_DIR_IMAGE)/an7583_$1-u-boot.lzma"; \
+  elif [ -f "$(STAGING_DIR_IMAGE)/an7583_$1-u-boot.bin.lzma" ]; then \
+    UBOOT_BIN="$(STAGING_DIR_IMAGE)/an7583_$1-u-boot.bin.lzma"; \
+  else \
+    UBOOT_BIN="$(STAGING_DIR_IMAGE)/an7583_$1-u-boot.bin"; \
+  fi; \
   $(STAGING_DIR_HOST)/bin/fiptool create \
 		--soc-fw $(STAGING_DIR_IMAGE)/an7583-bl31.lzma \
-		--nt-fw $(STAGING_DIR_IMAGE)/an7583_$1-u-boot.lzma \
+		--nt-fw "$$UBOOT_BIN" \
 		$(STAGING_DIR_IMAGE)/an7583_$1-bl31-u-boot.fip
   cat $(STAGING_DIR_IMAGE)/an7583_$1-bl31-u-boot.fip >> $@
 endef
@@ -20,32 +27,37 @@ define Device/FitImageLzma
   KERNEL_NAME := Image
 endef
 
-define Device/airoha_an7583-evb
+define Device/airoha_an7583-evb-multievb
   $(call Device/FitImageLzma)
   DEVICE_VENDOR := Airoha
-  DEVICE_MODEL := AN7583 Evaluation Board (SNAND)
+  DEVICE_MODEL := AN7583 Evaluation Board (Multi-evb)
   DEVICE_PACKAGES := aeonsemi-as21xxx-firmware kmod-leds-pwm \
-	kmod-pwm-airoha kmod-input-gpio-keys-polled
-  DEVICE_DTS := an7583-evb
-  DEVICE_DTS_CONFIG := config@1
+	kmod-pwm-airoha kmod-input-gpio-keys-polled kmod-phy-airoha-en8811h
+  DEVICE_DTS := an7583-evb-multievb
+  DEVICE_DTS_OVERLAY := an7583-evb an7583-evb-emmc
   IMAGE/sysupgrade.bin := append-kernel | pad-to 128k | append-rootfs | \
 	pad-rootfs | append-metadata
   ARTIFACT/preloader.bin := an7583-preloader rfb
   ARTIFACT/bl31-uboot.fip := an7583-bl31-uboot rfb
   ARTIFACTS := preloader.bin bl31-uboot.fip
 endef
-TARGET_DEVICES += airoha_an7583-evb
+TARGET_DEVICES += airoha_an7583-evb-multievb
 
-define Device/airoha_an7583-evb-emmc
-  DEVICE_VENDOR := Airoha
-  DEVICE_MODEL := AN7583 Evaluation Board (EMMC)
-  DEVICE_DTS := an7583-evb-emmc
-  DEVICE_PACKAGES := kmod-phy-airoha-en8811h
-  ARTIFACT/preloader.bin := an7583-preloader rfb
-  ARTIFACT/bl31-uboot.fip := an7583-bl31-uboot rfb
-  ARTIFACTS := preloader.bin bl31-uboot.fip
+define Device/airoha_an7583-evb-emmc-kite
+  $(call Device/airoha_an7583-evb-multievb)
+  DEVICE_MODEL := AN7583 Evaluation Board (eMMC + MT7992)
+  DEVICE_DTS_OVERLAY := an7583-evb-emmc-kite
+  DEVICE_PACKAGES += kmod-mt7992-firmware wpad-basic-mbedtls
 endef
-TARGET_DEVICES += airoha_an7583-evb-emmc
+TARGET_DEVICES += airoha_an7583-evb-emmc-kite
+
+define Device/airoha_an7583-evb-emmc-eagle
+  $(call Device/airoha_an7583-evb-multievb)
+  DEVICE_MODEL := AN7583 Evaluation Board (eMMC + MT7996)
+  DEVICE_DTS_OVERLAY := an7583-evb-emmc-eagle
+  DEVICE_PACKAGES += kmod-mt7996-firmware wpad-basic-mbedtls
+endef
+TARGET_DEVICES += airoha_an7583-evb-emmc-eagle
 
 define Device/nokia_xg-040g-mf-common
   $(call Device/FitImageLzma)
@@ -56,6 +68,8 @@ define Device/nokia_xg-040g-mf-common
   UBINIZE_OPTS := -E 5
   DEVICE_PACKAGES := kmod-phy-airoha-en8811h \
 	kmod-regulator-userspace-consumer kmod-usb-ledtrig-usbport
+  DEVICE_PACKAGES += kmod-airoha-en7572 kmod-airoha-xpon \
+	airoha-ponctl airoha-pond airoha-pon-board-data kmod-crypto-ecb
 endef
 
 define Device/nokia_xg-040g-mf

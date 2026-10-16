@@ -16,9 +16,11 @@ fi
 		if [ -n "$UPGRADE_BACKUP" ]; then
 			mkdir -p /mnt
 			if mount -t ext4 -o rw,noatime "$overlay_dev" /mnt; then
-				cp -af "$UPGRADE_BACKUP" "/mnt/$BACKUP_FILE"
-				umount /mnt
-				UPGRADE_BACKUP=""
+				if cp -af "$UPGRADE_BACKUP" "/mnt/$BACKUP_FILE"; then
+					umount /mnt && UPGRADE_BACKUP=""
+				else
+					umount /mnt
+				fi
 			fi
 		fi
 		echo erase >"$overlay_dev"

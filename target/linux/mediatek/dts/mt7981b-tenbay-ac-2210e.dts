@@ -7,6 +7,8 @@
 	compatible = "tenbay,ac-2210e", "mediatek,mt7981";
 
 	aliases {
+		i2c0 = &i2c_0;
+		i2c1 = &i2c_1;
 		led-boot = &led_run;
 		led-failsafe = &led_run;
 		led-running = &led_sys;

@@ -54,7 +54,7 @@ intel_get_vlan_ports(struct switch_dev *dev, struct switch_val *val)
 	struct intel_gsw *gsw = container_of(dev, struct intel_gsw, swdev);
 	struct switch_port *port;
 	GSW_VLAN_portMemberRead_t parm;
-	int i;
+	int i, ret;
 
 	if (val->port_vlan < 0)
 		return -EINVAL;
@@ -62,8 +62,10 @@ intel_get_vlan_ports(struct switch_dev *dev, struct switch_val *val)
 	memset((void *)&parm, 0, sizeof(GSW_VLAN_portMemberRead_t));
 	parm.nVId = val->port_vlan;
 	mutex_lock(&gsw->reg_mutex);
-	GSW_VLAN_PortMemberRead((void *)&gsw->pd, &parm);
+	ret = GSW_VLAN_PortMemberRead((void *)&gsw->pd, &parm);
 	mutex_unlock(&gsw->reg_mutex);
+	if (ret)
+		return ret;
 
 	port = &val->value.ports[0];
 	val->len = 0;
@@ -86,24 +88,28 @@ intel_set_vlan_ports(struct switch_dev *dev, struct switch_val *val)
 	struct intel_gsw *gsw = container_of(dev, struct intel_gsw, swdev);
 	GSW_VLAN_IdCreate_t vlan;
 	GSW_VLAN_portMemberAdd_t parm;
-	int i = 0;
+	int i = 0, ret;
 
-	if (val->port_vlan < 0 || val->port_vlan >= INTEL_NUM_VLANS || val->len >= INTEL_SWITCH_PORT_NUM)
+	if (val->port_vlan >= INTEL_NUM_VLANS || val->len > INTEL_SWITCH_PORT_NUM)
 		return -EINVAL;
+	for (i = 0; i < val->len; i++) {
+		if (val->value.ports[i].id >= INTEL_SWITCH_PORT_NUM)
+			return -EINVAL;
+	}
 
 	memset((void *)&vlan, 0, sizeof(GSW_VLAN_IdCreate_t));
 	memset((void *)&parm, 0, sizeof(GSW_VLAN_portMemberAdd_t));
 	vlan.nVId = val->port_vlan;
 	vlan.nFId = vlan.nVId; // RM#8744 fix lan-wan bridge fail
 	mutex_lock(&gsw->reg_mutex);
-	GSW_VLAN_IdCreate((void *)&gsw->pd, &vlan);
+	ret = GSW_VLAN_IdCreate((void *)&gsw->pd, &vlan);
 	mutex_unlock(&gsw->reg_mutex);
+	if (ret)
+		return ret;
 
 	parm.nVId = val->port_vlan;
 	for (i = 0; i < val->len; i++) {
 		struct switch_port *p = &val->value.ports[i];
-		if (p->id > INTEL_SWITCH_PORT_NUM)
-			return -EINVAL;
 
 		parm.nPortId = p->id;
 		if (p->flags & BIT(SWITCH_PORT_FLAG_TAGGED))
@@ -112,8 +118,10 @@ intel_set_vlan_ports(struct switch_dev *dev, struct switch_val *val)
 			parm.bVLAN_TagEgress = 0;
 
 		mutex_lock(&gsw->reg_mutex);
-		GSW_VLAN_PortMemberAdd((void *)&gsw->pd, &parm);
+		ret = GSW_VLAN_PortMemberAdd((void *)&gsw->pd, &parm);
 		mutex_unlock(&gsw->reg_mutex);
+		if (ret)
+			return ret;
 	}
 
 	return 0;
@@ -161,12 +169,15 @@ static int intel_get_port_link(struct switch_dev *dev,  int port,
 	struct intel_gsw *gsw = container_of(dev, struct intel_gsw, swdev);
 
 	GSW_portLinkCfg_t parm;
+	int ret;
 
 	memset((void *)&parm, 0, sizeof(GSW_portLinkCfg_t));
 	parm.nPortId = port;
 	mutex_lock(&gsw->reg_mutex);
-	GSW_PortLinkCfgGet((void *)&gsw->pd, &parm);
+	ret = GSW_PortLinkCfgGet((void *)&gsw->pd, &parm);
 	mutex_unlock(&gsw->reg_mutex);
+	if (ret)
+		return ret;
 
 	link->link = !parm.eLink;
 	link->duplex = !parm.eDuplex;
@@ -185,11 +196,13 @@ static int intel_apply_vlan_config(struct switch_dev *dev)
 static int intel_reset_switch(struct switch_dev *dev)
 {
 	struct intel_gsw *gsw = container_of(dev, struct intel_gsw, swdev);
+	int ret;
+
 	dev_info(gsw->dev, "perform reset");
 	mutex_lock(&gsw->reg_mutex);
-	intel_init(gsw);
+	ret = intel_init(gsw);
 	mutex_unlock(&gsw->reg_mutex);
-	return 0;
+	return ret;
 }
 
 static int intel_get_vlan_enable(struct switch_dev *dev,
@@ -237,12 +250,15 @@ static int intel_get_vlan_fid(struct switch_dev *dev,
 {
 	struct intel_gsw *gsw = container_of(dev, struct intel_gsw, swdev);
 	GSW_VLAN_IdGet_t parm;
+	int ret;
 
 	memset((void *)&parm, 0, sizeof(GSW_VLAN_IdGet_t));
 	parm.nVId = val->port_vlan;
 	mutex_lock(&gsw->reg_mutex);
-	GSW_VLAN_IdGet((void *)&gsw->pd, &parm);
+	ret = GSW_VLAN_IdGet((void *)&gsw->pd, &parm);
 	mutex_unlock(&gsw->reg_mutex);
+	if (ret)
+		return ret;
 
 	val->value.i = parm.nFId;
 
@@ -255,15 +271,37 @@ static int intel_set_vlan_fid(struct switch_dev *dev,
 {
 	struct intel_gsw *gsw = container_of(dev, struct intel_gsw, swdev);
 	GSW_VLAN_IdCreate_t parm;
+	GSW_VLAN_portMemberRead_t members;
+	GSW_VLAN_portMemberAdd_t member;
+	int i, ret;
 
 	memset((void *)&parm, 0, sizeof(GSW_VLAN_IdCreate_t));
+	memset(&members, 0, sizeof(members));
+	memset(&member, 0, sizeof(member));
 	parm.nVId = val->port_vlan;
 	parm.nFId = val->value.i;
+	members.nVId = val->port_vlan;
+	member.nVId = val->port_vlan;
 	mutex_lock(&gsw->reg_mutex);
-	GSW_VLAN_IdCreate((void *)&gsw->pd, &parm);
+	ret = GSW_VLAN_PortMemberRead((void *)&gsw->pd, &members);
+	if (ret)
+		goto out;
+	ret = GSW_VLAN_IdCreate((void *)&gsw->pd, &parm);
+	if (ret)
+		goto out;
+	for (i = 0; i < INTEL_SWITCH_PORT_NUM; i++) {
+		if (!(members.nPortId & BIT(i)))
+			continue;
+		member.nPortId = i;
+		member.bVLAN_TagEgress = !!(members.nTagId & BIT(i));
+		ret = GSW_VLAN_PortMemberAdd((void *)&gsw->pd, &member);
+		if (ret)
+			break;
+	}
+out:
 	mutex_unlock(&gsw->reg_mutex);
 
-	return 0;
+	return ret;
 }
 
 static int intel_get_port_mib(struct switch_dev *dev,
@@ -273,7 +311,7 @@ static int intel_get_port_mib(struct switch_dev *dev,
 	static char buf[4096];
 	GSW_RMON_Port_cnt_t parm;
 	struct intel_gsw *gsw = container_of(dev, struct intel_gsw, swdev);
-	int len = 0;
+	int len = 0, ret;
 
 	if (val->port_vlan >= INTEL_SWITCH_PORT_NUM)
 		return -EINVAL;
@@ -281,11 +319,13 @@ static int intel_get_port_mib(struct switch_dev *dev,
 	len += snprintf(buf + len, sizeof(buf) - len,
 	                "Port %d MIB counters\n", val->port_vlan);
 
-	parm.portDataMask = 0;
+	memset(&parm, 0, sizeof(parm));
 	parm.nPortId = val->port_vlan;
 	mutex_lock(&gsw->reg_mutex);
-	intel_count_rd(gsw, &parm);
+	ret = intel_count_rd(gsw, &parm);
 	mutex_unlock(&gsw->reg_mutex);
+	if (ret)
+		return ret;
 
 	len += sprintf(buf + len,
 	               "TxDrop      : %u\n"
@@ -314,11 +354,11 @@ static int intel_get_port_mib(struct switch_dev *dev,
 	               parm.nTxLateCollCount,
 	               parm.nTxPauseCount,
 	               parm.nTx64BytePkts,
-	               parm.nRx127BytePkts,
-	               parm.nRx255BytePkts,
-	               parm.nRx511BytePkts,
-	               parm.nRx1023BytePkts,
-	               parm.nRxMaxBytePkts,
+	               parm.nTx127BytePkts,
+	               parm.nTx255BytePkts,
+	               parm.nTx511BytePkts,
+	               parm.nTx1023BytePkts,
+	               parm.nTxMaxBytePkts,
 	               parm.nTxGoodBytes);
 
 	len += sprintf(buf + len,
@@ -365,19 +405,22 @@ static int intel_get_port_stats(struct switch_dev *dev, int port,
 {
 	GSW_RMON_Port_cnt_t parm;
 	struct intel_gsw *gsw = container_of(dev, struct intel_gsw, swdev);
+	int ret;
 
 	if (port < 0 || port >= INTEL_SWITCH_PORT_NUM)
 		return -EINVAL;
 
-	parm.portDataMask = 0;
+	memset(&parm, 0, sizeof(parm));
 	parm.nPortId = port;
 	simple_set_bit(0x25, (unsigned int *)&parm.portDataMask);
 	simple_set_bit(0x24, (unsigned int *)&parm.portDataMask);
 	simple_set_bit(0x0F, (unsigned int *)&parm.portDataMask);
 	simple_set_bit(0x0E, (unsigned int *)&parm.portDataMask);
 	mutex_lock(&gsw->reg_mutex);
-	intel_count_rd(gsw, &parm);
+	ret = intel_count_rd(gsw, &parm);
 	mutex_unlock(&gsw->reg_mutex);
+	if (ret)
+		return ret;
 
 	stats->tx_bytes = parm.nTxGoodBytes;
 	stats->rx_bytes = parm.nRxGoodBytes;
@@ -388,12 +431,15 @@ static int intel_get_port_stats(struct switch_dev *dev, int port,
 static int intel_get_single_phy_power(struct intel_gsw *gsw, int port_num)
 {
 	GSW_MDIO_data_t parm;
+	int ret;
 
 	parm.nAddressReg = 0;
 	parm.nAddressDev = port_num;
 	mutex_lock(&gsw->reg_mutex);
-	intel_phy_rd(gsw, &parm);
+	ret = intel_phy_rd(gsw, &parm);
 	mutex_unlock(&gsw->reg_mutex);
+	if (ret)
+		return ret;
 
 	if ((parm.nData & PHY_CTRL_ENABLE_POWER_DOWN)) {
 		return 0;
@@ -402,31 +448,41 @@ static int intel_get_single_phy_power(struct intel_gsw *gsw, int port_num)
 	return 1; /* power up */
 }
 
-static void intel_disable_single_phy(struct intel_gsw *gsw, int port_num)
+static int intel_disable_single_phy(struct intel_gsw *gsw, int port_num)
 {
 	GSW_MDIO_data_t parm;
+	int ret;
 
 	parm.nAddressReg = 0;
 	parm.nAddressDev = port_num;
 	mutex_lock(&gsw->reg_mutex);
-	intel_phy_rd(gsw, &parm);
-	parm.nData |= PHY_CTRL_ENABLE_POWER_DOWN;
-	intel_phy_wr(gsw, &parm);
+	ret = intel_phy_rd(gsw, &parm);
+	if (!ret) {
+		parm.nData |= PHY_CTRL_ENABLE_POWER_DOWN;
+		ret = intel_phy_wr(gsw, &parm);
+	}
 	mutex_unlock(&gsw->reg_mutex);
+
+	return ret;
 }
 
-static void intel_enable_single_phy(struct intel_gsw *gsw, int port_num)
+static int intel_enable_single_phy(struct intel_gsw *gsw, int port_num)
 {
 	GSW_MDIO_data_t parm;
+	int ret;
 
 	parm.nAddressReg = 0;
 	parm.nAddressDev = port_num;
 
 	mutex_lock(&gsw->reg_mutex);
-	intel_phy_rd(gsw, &parm);
-	parm.nData &= ~PHY_CTRL_ENABLE_POWER_DOWN;
-	intel_phy_wr(gsw, &parm);
+	ret = intel_phy_rd(gsw, &parm);
+	if (!ret) {
+		parm.nData &= ~PHY_CTRL_ENABLE_POWER_DOWN;
+		ret = intel_phy_wr(gsw, &parm);
+	}
 	mutex_unlock(&gsw->reg_mutex);
+
+	return ret;
 }
 
 static int intel_get_port_power(struct switch_dev *dev,
@@ -434,11 +490,15 @@ static int intel_get_port_power(struct switch_dev *dev,
                                 struct switch_val *val)
 {
 	struct intel_gsw *gsw = container_of(dev, struct intel_gsw, swdev);
+	int ret;
 
 	if (val->port_vlan >= INTEL_SWITCH_PORT_NUM)
 		return -EINVAL;
 
-	val->value.i = intel_get_single_phy_power(gsw, val->port_vlan);
+	ret = intel_get_single_phy_power(gsw, val->port_vlan);
+	if (ret < 0)
+		return ret;
+	val->value.i = ret;
 
 	return 0;
 }
@@ -452,13 +512,10 @@ static int intel_set_port_power(struct switch_dev *dev,
 	if (val->port_vlan >= INTEL_SWITCH_PORT_NUM)
 		return -EINVAL;
 
-	if (val->value.i == 0) {
-		intel_disable_single_phy(gsw, val->port_vlan);
-	} else {
-		intel_enable_single_phy(gsw, val->port_vlan);
-	}
+	if (val->value.i == 0)
+		return intel_disable_single_phy(gsw, val->port_vlan);
 
-	return 0;
+	return intel_enable_single_phy(gsw, val->port_vlan);
 }
 
 static int intel_get_ports_link_map(struct switch_dev *dev,
@@ -468,14 +525,24 @@ static int intel_get_ports_link_map(struct switch_dev *dev,
 	int port;
 	int map = 0;
 	struct intel_gsw *gsw = container_of(dev, struct intel_gsw, swdev);
+	ur link;
+	int ret = 0;
 
 	mutex_lock(&gsw->reg_mutex);
 	for (port = 0; port < INTEL_SWITCH_PORT_NUM; port++) {
-		if (GSW_PortLink((void *)&gsw->pd, port) == GSW_PORT_LINK_UP) {
+		ret = gsw_reg_rd((void *)&gsw->pd,
+		                 (MAC_PSTAT_LSTAT_OFFSET + (0xC * port)),
+		                 MAC_PSTAT_LSTAT_SHIFT,
+		                 MAC_PSTAT_LSTAT_SIZE, &link);
+		if (ret)
+			break;
+		if (link) {
 			map |= (1 << port);
 		}
 	}
 	mutex_unlock(&gsw->reg_mutex);
+	if (ret)
+		return ret;
 
 	val->value.i = map;
 
@@ -575,6 +642,7 @@ int intel_swconfig_init(struct intel_gsw *gsw)
 	if (ret) {
 		dev_notice(gsw->dev, "Failed to register switch %s\n",
 		           swdev->name);
+		mutex_destroy(&gsw->reg_mutex);
 		return ret;
 	}
 
@@ -585,8 +653,8 @@ int intel_swconfig_init(struct intel_gsw *gsw)
 
 void intel_swconfig_destroy(struct intel_gsw *gsw)
 {
-	mutex_destroy(&gsw->reg_mutex);
 	unregister_switch(&gsw->swdev);
+	mutex_destroy(&gsw->reg_mutex);
 }
 
 #endif
@@ -610,40 +678,45 @@ int intel_check_phy_linkup(int port)
 }
 #endif
 
-static void intel_led_init(struct intel_gsw *gsw, int led_mode)
+static int intel_led_init(struct intel_gsw *gsw, int led_mode)
 {
 	ethsw_api_dev_t *pedev = &gsw->pd;
 	GSW_MMD_data_t md;
-	int i = 0, mode = 0;
+	int i = 0, mode = 0, ret;
 
 	if (led_mode == LED_ALL_ON)
 		mode = GROUND_MODE;
 	else if (led_mode == LED_ALL_BLINK)
-		return; // switch not support, please use all on/off
+		return 0; // switch not support, please use all on/off
 	else
 		mode = POWER_MODE;
 
 	// port[0:4] <--> led[5:9]
-	gsw_reg_wr((void *)pedev, LED_MD_CFG_LED5_OFFSET,
-	           LED_MD_CFG_LED5_SHIFT,
-	           LED_MD_CFG_LED5_SIZE,
-	           mode);
-	gsw_reg_wr((void *)pedev, LED_MD_CFG_LED6_OFFSET,
-	           LED_MD_CFG_LED6_SHIFT,
-	           LED_MD_CFG_LED6_SIZE,
-	           mode);
-	gsw_reg_wr((void *)pedev, LED_MD_CFG_LED7_OFFSET,
-	           LED_MD_CFG_LED7_SHIFT,
-	           LED_MD_CFG_LED7_SIZE,
-	           mode);
-	gsw_reg_wr((void *)pedev, LED_MD_CFG_LED8_OFFSET,
-	           LED_MD_CFG_LED8_SHIFT,
-	           LED_MD_CFG_LED8_SIZE,
-	           mode);
-	gsw_reg_wr((void *)pedev, LED_MD_CFG_LED9_OFFSET,
-	           LED_MD_CFG_LED9_SHIFT,
-	           LED_MD_CFG_LED9_SIZE,
-	           mode);
+	ret = gsw_reg_wr((void *)pedev, LED_MD_CFG_LED5_OFFSET,
+	                 LED_MD_CFG_LED5_SHIFT,
+	                 LED_MD_CFG_LED5_SIZE, mode);
+	if (ret)
+		return ret;
+	ret = gsw_reg_wr((void *)pedev, LED_MD_CFG_LED6_OFFSET,
+	                 LED_MD_CFG_LED6_SHIFT,
+	                 LED_MD_CFG_LED6_SIZE, mode);
+	if (ret)
+		return ret;
+	ret = gsw_reg_wr((void *)pedev, LED_MD_CFG_LED7_OFFSET,
+	                 LED_MD_CFG_LED7_SHIFT,
+	                 LED_MD_CFG_LED7_SIZE, mode);
+	if (ret)
+		return ret;
+	ret = gsw_reg_wr((void *)pedev, LED_MD_CFG_LED8_OFFSET,
+	                 LED_MD_CFG_LED8_SHIFT,
+	                 LED_MD_CFG_LED8_SIZE, mode);
+	if (ret)
+		return ret;
+	ret = gsw_reg_wr((void *)pedev, LED_MD_CFG_LED9_OFFSET,
+	                 LED_MD_CFG_LED9_SHIFT,
+	                 LED_MD_CFG_LED9_SIZE, mode);
+	if (ret)
+		return ret;
 
 	// config led when link is 10/100/1000Mbit/s
 	for (i = 0; i < INTEL_PHY_PORT_NUM; i++) {
@@ -654,8 +727,12 @@ static void intel_led_init(struct intel_gsw *gsw, int led_mode)
 		else
 			md.nData = 0x70; // active on 10/100/1000
 
-		GSW_MmdDataWrite((void *)&gsw->pd, &md);
+		ret = GSW_MmdDataWrite((void *)&gsw->pd, &md);
+		if (ret)
+			return ret;
 	}
+
+	return 0;
 }
 
 #if 0
@@ -672,29 +749,43 @@ void intel_ifg_init(void)
 static void intel_disable_all_phy(struct intel_gsw *gsw)
 {
 	GSW_MDIO_data_t parm;
-	int i;
+	int i, ret;
 
 	parm.nAddressReg = 0;
 	for (i = 0; i < INTEL_PHY_PORT_NUM; i++) {
 		parm.nAddressDev = i;
-		intel_phy_rd(gsw, &parm);
+		ret = intel_phy_rd(gsw, &parm);
+		if (ret) {
+			dev_warn(gsw->dev, "failed to read PHY %d control: %d\n",
+			         i, ret);
+			continue;
+		}
 		parm.nData |= PHY_CTRL_ENABLE_POWER_DOWN;
-		intel_phy_wr(gsw, &parm);
+		ret = intel_phy_wr(gsw, &parm);
+		if (ret)
+			dev_warn(gsw->dev, "failed to disable PHY %d: %d\n",
+			         i, ret);
 	}
 }
 
-static void intel_enable_all_phy(struct intel_gsw *gsw)
+static int intel_enable_all_phy(struct intel_gsw *gsw)
 {
 	GSW_MDIO_data_t parm;
-	int i;
+	int i, ret;
 
 	parm.nAddressReg = 0;
 	for (i = 0; i < INTEL_PHY_PORT_NUM; i++) {
 		parm.nAddressDev = i;
-		intel_phy_rd(gsw, &parm);
+		ret = intel_phy_rd(gsw, &parm);
+		if (ret)
+			return ret;
 		parm.nData &= ~PHY_CTRL_ENABLE_POWER_DOWN;
-		intel_phy_wr(gsw, &parm);
+		ret = intel_phy_wr(gsw, &parm);
+		if (ret)
+			return ret;
 	}
+
+	return 0;
 }
 
 
@@ -788,7 +879,7 @@ static int intel_rgmii_init(struct intel_gsw *gsw, int port)
 	s = intel_mdio_wr(gsw, (MAC_CTRL_4_LPIEN_OFFSET + (0xC * port)),
 	                  MAC_CTRL_4_LPIEN_SHIFT,
 	                  MAC_CTRL_4_LPIEN_SIZE, 0);
-	return 0;
+	return s;
 }
 
 #if 1
@@ -798,27 +889,29 @@ static int intel_port_rgmii_dalay_set(struct intel_gsw *gsw, int port, int txDel
 		return -1;
 
 	if(port == RGMII_PORT0) {
-		intel_mdio_wr(gsw, PCDU_5_RXDLY_OFFSET,
-		              PCDU_5_RXDLY_SHIFT,
-		              PCDU_5_RXDLY_SIZE,
-		              rxDelay);
-		intel_mdio_wr(gsw, PCDU_5_TXDLY_OFFSET,
-		              PCDU_5_TXDLY_SHIFT,
-		              PCDU_5_TXDLY_SIZE,
-		              txDelay);
+		int ret;
+
+		ret = intel_mdio_wr(gsw, PCDU_5_RXDLY_OFFSET,
+		                    PCDU_5_RXDLY_SHIFT,
+		                    PCDU_5_RXDLY_SIZE, rxDelay);
+		if (ret)
+			return ret;
+		return intel_mdio_wr(gsw, PCDU_5_TXDLY_OFFSET,
+		                     PCDU_5_TXDLY_SHIFT,
+		                     PCDU_5_TXDLY_SIZE, txDelay);
 	} else if(port == RGMII_PORT1) {
-		intel_mdio_wr(gsw, PCDU_6_RXDLY_OFFSET,
-		              PCDU_6_RXDLY_SHIFT,
-		              PCDU_6_RXDLY_SIZE,
-		              rxDelay);
-		intel_mdio_wr(gsw, PCDU_6_TXDLY_OFFSET,
-		              PCDU_6_TXDLY_SHIFT,
-		              PCDU_6_TXDLY_SIZE,
-		              txDelay);
+		int ret;
+
+		ret = intel_mdio_wr(gsw, PCDU_6_RXDLY_OFFSET,
+		                    PCDU_6_RXDLY_SHIFT,
+		                    PCDU_6_RXDLY_SIZE, rxDelay);
+		if (ret)
+			return ret;
+		return intel_mdio_wr(gsw, PCDU_6_TXDLY_OFFSET,
+		                     PCDU_6_TXDLY_SHIFT,
+		                     PCDU_6_TXDLY_SIZE, txDelay);
 	} else
 		return -1;
-
-	return 0;
 }
 #endif
 
@@ -894,45 +987,63 @@ int intel_set_cpu_port_self_mirror(struct sf_eswitch_priv *pesw_priv, int port, 
 }
 #endif
 
-void intel_init(struct intel_gsw *gsw)
+int intel_init(struct intel_gsw *gsw)
 {
 	GSW_MMD_data_t md;
+	int i, ret;
 #ifdef CONFIG_SWCONFIG
 	GSW_VLAN_portCfg_t pVlanCfg;
-	int i;
 #endif
 	GSW_HW_Init_t pHwInit = {
 		.eInitMode = GSW_HW_INIT_WR,
 	};
 
-	GSW_HW_Init(&gsw->pd, &pHwInit);
+	ret = GSW_HW_Init(&gsw->pd, &pHwInit);
+	if (ret)
+		return ret;
 
-	intel_rgmii_init(gsw, RGMII_PORT0);
+	ret = intel_rgmii_init(gsw, RGMII_PORT0);
+	if (ret)
+		return ret;
 #if 1
-	intel_port_rgmii_dalay_set(gsw, RGMII_PORT0, 2, 0);
+	ret = intel_port_rgmii_dalay_set(gsw, RGMII_PORT0, 2, 0);
+	if (ret)
+		return ret;
 #endif
-	intel_enable_all_phy(gsw);
+	ret = intel_enable_all_phy(gsw);
+	if (ret)
+		return ret;
 
-	intel_led_init(gsw, LED_ALL_DEFAULT);
+	ret = intel_led_init(gsw, LED_ALL_DEFAULT);
+	if (ret)
+		return ret;
 
 	/* RM#9120 disable auto downspeed */
 	for (i = 0; i < INTEL_PHY_PORT_NUM; i++) {
 		md.nAddressDev = i;
 		md.nAddressReg = 0x1F01EF;
 		md.nData = 0x2;
-		GSW_MmdDataWrite((void *)&gsw->pd, &md);
+		ret = GSW_MmdDataWrite((void *)&gsw->pd, &md);
+		if (ret)
+			return ret;
 	}
 #ifdef CONFIG_SWCONFIG
 	/* port config init */
 	for (i = 0; i < INTEL_SWITCH_PORT_NUM; i++) {
 		pVlanCfg.nPortId = i;
-		GSW_VLAN_PortCfgGet((void *)&gsw->pd, &pVlanCfg);
+		ret = GSW_VLAN_PortCfgGet((void *)&gsw->pd, &pVlanCfg);
+		if (ret)
+			return ret;
 
 		pVlanCfg.eAdmitMode = GSW_VLAN_ADMIT_ALL;
 		pVlanCfg.eVLAN_MemberViolation = GSW_VLAN_MEMBER_VIOLATION_BOTH;
-		GSW_VLAN_PortCfgSet((void *)&gsw->pd, &pVlanCfg);
+		ret = GSW_VLAN_PortCfgSet((void *)&gsw->pd, &pVlanCfg);
+		if (ret)
+			return ret;
 	}
 #endif
+
+	return 0;
 }
 
 void intel_deinit(struct intel_gsw *gsw)

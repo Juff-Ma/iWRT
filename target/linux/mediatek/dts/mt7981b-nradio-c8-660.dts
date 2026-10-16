@@ -107,19 +107,21 @@
 };
 
 &mdio_bus {
-	reset-gpios = <&pio 7 GPIO_ACTIVE_LOW>, <&pio 8 GPIO_ACTIVE_LOW>;
-	reset-delay-us = <600>;
-	reset-post-delay-us = <20000>;
-
 	phy5: ethernet-phy@5 {
-		reg = <5>;
 		compatible = "ethernet-phy-ieee802.3-c45";
+		reg = <5>;
+		reset-gpios = <&pio 7 GPIO_ACTIVE_LOW>;
+		reset-assert-us = <600>;
+		reset-deassert-us = <20000>;
 		mxl,led-config = <0x3f0 0x330 0x0 0x0>;
 	};
 
 	phy21: ethernet-phy@21 {
-		reg = <21>;
 		compatible = "ethernet-phy-ieee802.3-c45";
+		reg = <21>;
+		reset-gpios = <&pio 8 GPIO_ACTIVE_LOW>;
+		reset-assert-us = <600>;
+		reset-deassert-us = <20000>;
 	};
 
 	switch: switch@1f {

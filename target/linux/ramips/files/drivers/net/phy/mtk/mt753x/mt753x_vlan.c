@@ -3,6 +3,8 @@
  * Copyright (c) 2018 MediaTek Inc.
  */
 
+#include <linux/errno.h>
+
 #include "mt753x.h"
 #include "mt753x_regs.h"
 
@@ -28,40 +30,49 @@ struct mt753x_mapping mt753x_def_mapping[] = {
 	},
 };
 
-void mt753x_vlan_ctrl(struct gsw_mt753x *gsw, u32 cmd, u32 val)
+int mt753x_vlan_ctrl(struct gsw_mt753x *gsw, u32 cmd, u32 val)
 {
-	int i;
+	int i, ret;
 
-	mt753x_reg_write(gsw, VTCR,
-	                 VTCR_BUSY | ((cmd << VTCR_FUNC_S) & VTCR_FUNC_M) |
-	                 (val & VTCR_VID_M));
+	ret = mt753x_reg_write(gsw, VTCR,
+	                       VTCR_BUSY | ((cmd << VTCR_FUNC_S) & VTCR_FUNC_M) |
+	                       (val & VTCR_VID_M));
+	if (ret < 0)
+		return ret;
 
 	for (i = 0; i < 300; i++) {
-		u32 val = mt753x_reg_read(gsw, VTCR);
+		u32 val;
+
+		ret = mt753x_reg_read_checked(gsw, VTCR, &val);
+		if (ret < 0)
+			return ret;
 
 		if ((val & VTCR_BUSY) == 0)
-			break;
+			return 0;
 
 		usleep_range(1000, 1100);
 	}
 
-	if (i == 300)
-		dev_info(gsw->dev, "vtcr timeout\n");
+	dev_info(gsw->dev, "vtcr timeout\n");
+	return -ETIMEDOUT;
 }
 
-static void mt753x_write_vlan_entry(struct gsw_mt753x *gsw, int vlan, u16 vid,
+static int mt753x_write_vlan_entry(struct gsw_mt753x *gsw, int vlan, u16 vid,
                                     u8 ports, u8 etags)
 {
-	int port;
+	int port, ret;
 	u32 val;
 
 	/* vlan port membership */
 	if (ports)
-		mt753x_reg_write(gsw, VAWD1,
-		                 IVL_MAC | VTAG_EN | VENTRY_VALID |
-		                 ((ports << PORT_MEM_S) & PORT_MEM_M));
+		ret = mt753x_reg_write(gsw, VAWD1,
+		                       IVL_MAC | VTAG_EN | VENTRY_VALID |
+		                       ((ports << PORT_MEM_S) & PORT_MEM_M));
 	else
-		mt753x_reg_write(gsw, VAWD1, 0);
+		ret = mt753x_reg_write(gsw, VAWD1, 0);
+
+	if (ret < 0)
+		return ret;
 
 	/* egress mode */
 	val = 0;
@@ -71,23 +82,28 @@ static void mt753x_write_vlan_entry(struct gsw_mt753x *gsw, int vlan, u16 vid,
 		else
 			val |= ETAG_CTRL_UNTAG << PORT_ETAG_S(port);
 	}
-	mt753x_reg_write(gsw, VAWD2, val);
+	ret = mt753x_reg_write(gsw, VAWD2, val);
+	if (ret < 0)
+		return ret;
 
 	/* write to vlan table */
-	mt753x_vlan_ctrl(gsw, VTCR_WRITE_VLAN_ENTRY, vid);
+	return mt753x_vlan_ctrl(gsw, VTCR_WRITE_VLAN_ENTRY, vid);
 }
 
-void mt753x_apply_vlan_config(struct gsw_mt753x *gsw)
+int mt753x_apply_vlan_config(struct gsw_mt753x *gsw)
 {
-	int i, j;
+	int i, j, ret;
 	u8 tag_ports;
 	u8 untag_ports;
 	bool is_mirror = false;
 
 	/* set all ports as security mode */
-	for (i = 0; i < MT753X_NUM_PORTS; i++)
-		mt753x_reg_write(gsw, PCR(i),
-		                 PORT_MATRIX_M | SECURITY_MODE);
+	for (i = 0; i < MT753X_NUM_PORTS; i++) {
+		ret = mt753x_reg_write(gsw, PCR(i),
+		                       PORT_MATRIX_M | SECURITY_MODE);
+		if (ret < 0)
+			return ret;
+	}
 
 	/* check if a port is used in tag/untag vlan egress mode */
 	tag_ports = 0;
@@ -119,12 +135,17 @@ void mt753x_apply_vlan_config(struct gsw_mt753x *gsw)
 			pvc_mode = (0x8100 << STAG_VPID_S) |
 			           (VA_TRANSPARENT_PORT << VLAN_ATTR_S);
 
-		mt753x_reg_write(gsw, PVC(i), pvc_mode);
+		ret = mt753x_reg_write(gsw, PVC(i), pvc_mode);
+		if (ret < 0)
+			return ret;
 	}
 
 	/* first clear the switch vlan table */
-	for (i = 0; i < MT753X_NUM_VLANS; i++)
-		mt753x_write_vlan_entry(gsw, i, i, 0, 0);
+	for (i = 0; i < MT753X_NUM_VLANS; i++) {
+		ret = mt753x_write_vlan_entry(gsw, i, i, 0, 0);
+		if (ret)
+			return ret;
+	}
 
 	/* now program only vlans with members to avoid
 	 * clobbering remapped entries in later iterations
@@ -134,8 +155,11 @@ void mt753x_apply_vlan_config(struct gsw_mt753x *gsw)
 		u8 member = gsw->vlan_entries[i].member;
 		u8 etags = gsw->vlan_entries[i].etags;
 
-		if (member)
-			mt753x_write_vlan_entry(gsw, i, vid, member, etags);
+		if (member) {
+			ret = mt753x_write_vlan_entry(gsw, i, vid, member, etags);
+			if (ret)
+				return ret;
+		}
 	}
 
 	/* Port Default PVID */
@@ -147,10 +171,14 @@ void mt753x_apply_vlan_config(struct gsw_mt753x *gsw)
 		if (vlan < MT753X_NUM_VLANS && gsw->vlan_entries[vlan].member)
 			pvid = gsw->vlan_entries[vlan].vid;
 
-		val = mt753x_reg_read(gsw, PPBV1(i));
+		ret = mt753x_reg_read_checked(gsw, PPBV1(i), &val);
+		if (ret < 0)
+			return ret;
 		val &= ~GRP_PORT_VID_M;
 		val |= pvid;
-		mt753x_reg_write(gsw, PPBV1(i), val);
+		ret = mt753x_reg_write(gsw, PPBV1(i), val);
+		if (ret < 0)
+			return ret;
 	}
 
 	/* FIXME: MT7530 only supports one monitor port, but MT7631 supports multi,
@@ -159,7 +187,11 @@ void mt753x_apply_vlan_config(struct gsw_mt753x *gsw)
 
 	/* set mirroring source port */
 	for (i = 0; i < MT753X_NUM_PORTS; i++) {
-		u32 val = mt753x_reg_read(gsw, PCR(i));
+		u32 val;
+
+		ret = mt753x_reg_read_checked(gsw, PCR(i), &val);
+		if (ret < 0)
+			return ret;
 		val &= ~(MIRROR_SRC_RX_BIT | MIRROR_SRC_TX_BIT);
 		if (gsw->port_entries[i].mirror_rx) {
 			val |= MIRROR_SRC_RX_BIT;
@@ -169,22 +201,38 @@ void mt753x_apply_vlan_config(struct gsw_mt753x *gsw)
 			val |= MIRROR_SRC_TX_BIT;
 			is_mirror = true;
 		}
-		mt753x_reg_write(gsw, PCR(i), val);
+		ret = mt753x_reg_write(gsw, PCR(i), val);
+		if (ret < 0)
+			return ret;
 	}
 
 	/* set mirroring monitor port */
 	if (is_mirror) {
-		u32 val = mt753x_reg_read(gsw, MT753X_MIRROR_REG(gsw));
+		u32 val;
+
+		ret = mt753x_reg_read_checked(gsw, MT753X_MIRROR_REG(gsw), &val);
+		if (ret < 0)
+			return ret;
 		val |= MT753X_MIRROR_EN(gsw);
 		val &= ~MT753X_MIRROR_MASK(gsw);
 		val |= MT753X_MIRROR_PORT_SET(gsw, gsw->mirror_dest_port);
-		mt753x_reg_write(gsw, MT753X_MIRROR_REG(gsw), val);
+		ret = mt753x_reg_write(gsw, MT753X_MIRROR_REG(gsw), val);
+		if (ret < 0)
+			return ret;
 	} else {
-		u32 val = mt753x_reg_read(gsw, MT753X_MIRROR_REG(gsw));
+		u32 val;
+
+		ret = mt753x_reg_read_checked(gsw, MT753X_MIRROR_REG(gsw), &val);
+		if (ret < 0)
+			return ret;
 		val &= ~MT753X_MIRROR_EN(gsw);
 		val &= ~MT753X_MIRROR_MASK(gsw);
-		mt753x_reg_write(gsw, MT753X_MIRROR_REG(gsw), val);
+		ret = mt753x_reg_write(gsw, MT753X_MIRROR_REG(gsw), val);
+		if (ret < 0)
+			return ret;
 	}
+
+	return 0;
 }
 
 struct mt753x_mapping *mt753x_find_mapping(struct device_node *np)

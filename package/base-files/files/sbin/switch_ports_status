@@ -261,7 +261,8 @@ call_link_changed()
 		ports=$(uci -q get network.@switch_vlan[$idx].ports)
 		for p in $ports; do
 			if [ "$p" = "${DIFFPORT}" ] || [ "$p" = "${DIFFPORT}t" ]; then
-				vlan=$(uci -q get network.@switch_vlan[$idx].vlan)
+				vlan=$(uci -q get network.@switch_vlan[$idx].vid)
+				[ -n "$vlan" ] || vlan=$(uci -q get network.@switch_vlan[$idx].vlan)
 				for p in $ports; do
 					for cpu in $CPUS; do
 						if [ "$p" = ${cpu##*@}t ]; then

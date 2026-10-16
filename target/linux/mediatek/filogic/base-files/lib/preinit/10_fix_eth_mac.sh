@@ -32,7 +32,7 @@ preinit_set_mac_address() {
 		addr=$(mmc_get_mac_binary factory 0x24)
 		ip link set dev eth0 address "$addr"
 		addr=$(mmc_get_mac_binary factory 0x2a)
-		ip link set dev eth1 address "$addr"
+		ip link set dev wan address "$addr"
 		;;
 	mercusys,mr90x-v1|\
 	tplink,archer-ax80-v1|\

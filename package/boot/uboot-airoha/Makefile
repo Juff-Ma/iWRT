@@ -45,7 +45,7 @@ endef
 define U-Boot/an7581_rfb
   NAME:=AN7581 Reference Board
   UBOOT_CONFIG:=an7581_evb
-  BUILD_DEVICES:=airoha_an7581-evb airoha_an7581-evb-emmc-eagle airoha_an7581-evb-emmc-kite
+  BUILD_DEVICES:=airoha_an7581-evb-multievb
   BUILD_SUBTARGET:=an7581
   BL2_IMAGE:=an7581-bl2.bin
   BL31_IMAGE:=an7581-bl31.bin
@@ -65,7 +65,7 @@ endef
 define U-Boot/an7583_rfb
   NAME:=AN7583 Reference Board
   UBOOT_CONFIG:=an7583_evb
-  BUILD_DEVICES:=airoha_an7583-evb airoha_an7583-evb-emmc
+  BUILD_DEVICES:=airoha_an7583-evb-multievb
   BUILD_SUBTARGET:=an7583
   BL2_IMAGE:=an7583-bl2.bin
   BL31_IMAGE:=an7583-bl31.bin
@@ -162,7 +162,7 @@ define Build/fip-image-legacy
 		--align 1024 \
 		--tb-fw files/$(BL2_IMAGE) \
 		--soc-fw $(if $(BL31_LZMA_PRECOMPRESSED),files/$(BL31_IMAGE),$(PKG_BUILD_DIR)/bl31.bin$(if $(LZMA_COMPRESS),.lzma)) \
-		--nt-fw $(PKG_BUILD_DIR)/u-boot.bin$(if $(LZMA_COMPRESS),.lzma) \
+		--nt-fw $(PKG_BUILD_DIR)/u-boot.$(if $(LZMA_COMPRESS),lzma,bin) \
 		$(PKG_BUILD_DIR)/u-boot.fip
 endef
 
@@ -177,7 +177,7 @@ define Build/fip-image
 	$(STAGING_DIR_HOST)/bin/fiptool create \
 		--tb-fw files/$(BL2_IMAGE) \
 		--soc-fw $(PKG_BUILD_DIR)/bl31.bin$(if $(LZMA_COMPRESS),.lzma) \
-		--nt-fw $(PKG_BUILD_DIR)/u-boot.bin$(if $(LZMA_COMPRESS),.lzma) \
+		--nt-fw $(PKG_BUILD_DIR)/u-boot.$(if $(LZMA_COMPRESS),lzma,bin) \
 		$(PKG_BUILD_DIR)/u-boot.fip
 endef
 
@@ -185,7 +185,8 @@ define Build/Compile
 	$(call Build/Compile/U-Boot)
 	$(if $(LZMA_COMPRESS), $(STAGING_DIR_HOST)/bin/lzma e \
 		$(PKG_BUILD_DIR)/u-boot.bin \
-		$(PKG_BUILD_DIR)/u-boot.bin.lzma)
+		$(PKG_BUILD_DIR)/u-boot.lzma)
+	$(if $(LZMA_COMPRESS), ln -sf u-boot.lzma $(PKG_BUILD_DIR)/u-boot.bin.lzma)
 ifeq ($(UBOOT_IMAGE),u-boot.fip)
 ifeq ($(FIP_LEGACY),1)
 	$(call Build/fip-image-bl2-legacy)
@@ -214,8 +215,10 @@ else
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/u-boot.fip $(STAGING_DIR_IMAGE)/$(BUILD_VARIANT)-bl31-u-boot.fip
 endif
 else
-	$(INSTALL_DATA) $(PKG_BUILD_DIR)/u-boot.bin$(if $(LZMA_COMPRESS),.lzma) \
-		$(STAGING_DIR_IMAGE)/$(BUILD_VARIANT)-u-boot.bin$(if $(LZMA_COMPRESS),.lzma)
+	$(INSTALL_DATA) $(PKG_BUILD_DIR)/u-boot.$(if $(LZMA_COMPRESS),lzma,bin) \
+		$(STAGING_DIR_IMAGE)/$(BUILD_VARIANT)-u-boot.$(if $(LZMA_COMPRESS),lzma,bin)
+	$(if $(LZMA_COMPRESS),ln -sf $(BUILD_VARIANT)-u-boot.lzma \
+		$(STAGING_DIR_IMAGE)/$(BUILD_VARIANT)-u-boot.bin.lzma)
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/u-boot.dtb \
 		$(STAGING_DIR_IMAGE)/$(BUILD_VARIANT)-u-boot.dtb
 endif

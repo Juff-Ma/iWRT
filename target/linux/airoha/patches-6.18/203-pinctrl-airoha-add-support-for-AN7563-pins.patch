@@ -1,23 +1,371 @@
 From: Ray Liu <ray.xy.liu@gmail.com>
-Date: Wed, 17 Jun 2026 10:00:00 +0800
-Subject: [PATCH] pinctrl: airoha: add support for AN7563 pins
+Subject: [PATCH] pinctrl: airoha: add AN7563 driver using the shared core
 
-Add AN7563-specific pin, group, function and pin configuration data to
-the shared Airoha pinctrl driver. AN7563 shares the EN7581 register
-layout but exposes a smaller pad set and uses extra GPIO mux bits for
-the standalone PCIe reset, I2C, SPI and UART pads.
+Keep the AN7563 pin, mux and pin configuration tables in a separate SoC
+module after the Airoha pinctrl driver move and split. Register the
+AN7563 chip-SCU match and enable this module on ARM/AArch32.
 
-Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
+The shared core now depends on ARCH_AIROHA, so the earlier patch relaxing
+the ARM64 dependency in the old MediaTek Kconfig is no longer needed.
+
 ---
- drivers/pinctrl/mediatek/pinctrl-airoha.c | 695 ++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 695 insertions(+), 0 deletions(-)
-
---- a/drivers/pinctrl/mediatek/pinctrl-airoha.c
-+++ b/drivers/pinctrl/mediatek/pinctrl-airoha.c
-@@ -84,6 +84,14 @@
- #define GPIO_SPI_CS1_MODE_MASK			BIT(0)
+--- a/drivers/pinctrl/airoha/Kconfig
++++ b/drivers/pinctrl/airoha/Kconfig
+@@ -13,6 +13,7 @@ config PINCTRL_AIROHA
+ 	select GPIOLIB
+ 	select GPIOLIB_IRQCHIP
+ 	select REGMAP_MMIO
++	imply PINCTRL_AIROHA_AN7563
+ 	imply PINCTRL_AIROHA_AN7581
+ 	imply PINCTRL_AIROHA_AN7583
+ 	imply PINCTRL_AIROHA_EN7523
+@@ -20,6 +21,14 @@ config PINCTRL_AIROHA
+ 	  Shared pin controller and gpio driver code for different
+ 	  Airoha SoCs.
  
- #define REG_GPIO_PON_MODE			0x021c
++config PINCTRL_AIROHA_AN7563
++	tristate "AN7563 pinctrl"
++	depends on ARM || COMPILE_TEST
++	depends on PINCTRL_AIROHA
++	help
++	  Say yes here to support pin controller and gpio driver
++	  on Airoha AN7563 and AN7552 SoCs running in AArch32 mode.
++
+ config PINCTRL_AIROHA_AN7581
+ 	tristate "AN7581 pinctrl"
+ 	depends on ARM64 || COMPILE_TEST
+--- a/drivers/pinctrl/airoha/Makefile
++++ b/drivers/pinctrl/airoha/Makefile
+@@ -4,6 +4,7 @@
+ obj-$(CONFIG_PINCTRL_AIROHA)		+= pinctrl-airoha.o
+ 
+ # SoC drivers
++obj-$(CONFIG_PINCTRL_AIROHA_AN7563)	+= pinctrl-an7563.o
+ obj-$(CONFIG_PINCTRL_AIROHA_AN7581)	+= pinctrl-an7581.o
+ obj-$(CONFIG_PINCTRL_AIROHA_AN7583)	+= pinctrl-an7583.o
+ obj-$(CONFIG_PINCTRL_AIROHA_EN7523)	+= pinctrl-en7523.o
+--- /dev/null
++++ b/drivers/pinctrl/airoha/pinctrl-an7563.c
+@@ -0,0 +1,1028 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Author: Lorenzo Bianconi <lorenzo@kernel.org>
++ * Author: Benjamin Larsson <benjamin.larsson@genexis.eu>
++ * Author: Markus Gothe <markus.gothe@genexis.eu>
++ */
++
++#include "airoha-common.h"
++
++/* MUX */
++#define REG_GPIO_2ND_I2C_MODE			0x0214
++#define GPIO_LAN3_LED1_MODE_MASK		BIT(10)
++#define GPIO_LAN3_LED0_MODE_MASK		BIT(9)
++#define GPIO_LAN2_LED1_MODE_MASK		BIT(8)
++#define GPIO_LAN2_LED0_MODE_MASK		BIT(7)
++#define GPIO_LAN1_LED1_MODE_MASK		BIT(6)
++#define GPIO_LAN1_LED0_MODE_MASK		BIT(5)
++#define GPIO_LAN0_LED1_MODE_MASK		BIT(4)
++#define GPIO_LAN0_LED0_MODE_MASK		BIT(3)
++
++#define REG_GPIO_SPI_CS1_MODE			0x0218
++#define GPIO_PCM2_MODE_MASK			BIT(13)
++#define GPIO_PCM1_MODE_MASK			BIT(12)
++#define GPIO_SPI_QUAD_MODE_MASK			BIT(4)
++#define GPIO_SPI_CS1_MODE_MASK			BIT(0)
++
++#define REG_GPIO_PON_MODE			0x021c
++#define GPIO_PARALLEL_NAND_MODE_MASK		BIT(14)
++#define GPIO_SGMII_MDIO_MODE_MASK		BIT(13)
++#define SIPO_RCLK_MODE_MASK			BIT(11)
++#define GPIO_PCIE_RESET1_MASK			BIT(10)
++#define GPIO_PCIE_RESET0_MASK			BIT(9)
++#define GPIO_HSUART_CTS_RTS_MODE_MASK		BIT(6)
++#define GPIO_HSUART_MODE_MASK			BIT(5)
++#define GPIO_SIPO_MODE_MASK			BIT(2)
++#define GPIO_PON_MODE_MASK			BIT(0)
++
++#define REG_NPU_UART_EN				0x0224
++#define JTAG_UDI_EN_MASK			BIT(4)
++#define JTAG_DFD_EN_MASK			BIT(3)
++
++/* LED MAP */
++#define REG_LAN_LED0_MAPPING			0x027c
++#define REG_LAN_LED1_MAPPING			0x0280
++
++#define LAN3_LED_MAPPING_MASK			GENMASK(14, 12)
++#define LAN3_PHY_LED_MAP(_n)			FIELD_PREP_CONST(LAN3_LED_MAPPING_MASK, (_n))
++
++#define LAN2_LED_MAPPING_MASK			GENMASK(10, 8)
++#define LAN2_PHY_LED_MAP(_n)			FIELD_PREP_CONST(LAN2_LED_MAPPING_MASK, (_n))
++
++#define LAN1_LED_MAPPING_MASK			GENMASK(6, 4)
++#define LAN1_PHY_LED_MAP(_n)			FIELD_PREP_CONST(LAN1_LED_MAPPING_MASK, (_n))
++
++#define LAN0_LED_MAPPING_MASK			GENMASK(2, 0)
++#define LAN0_PHY_LED_MAP(_n)			FIELD_PREP_CONST(LAN0_LED_MAPPING_MASK, (_n))
++
++/* CONF */
++#define REG_I2C_SDA_E2				0x001c
++#define SPI_MISO_E2_MASK			BIT(14)
++#define SPI_MOSI_E2_MASK			BIT(13)
++#define SPI_CLK_E2_MASK				BIT(12)
++#define SPI_CS0_E2_MASK				BIT(11)
++#define PCIE1_RESET_E2_MASK			BIT(9)
++#define PCIE0_RESET_E2_MASK			BIT(8)
++#define UART1_RXD_E2_MASK			BIT(3)
++#define UART1_TXD_E2_MASK			BIT(2)
++#define I2C_SCL_E2_MASK				BIT(1)
++#define I2C_SDA_E2_MASK				BIT(0)
++
++#define REG_I2C_SDA_E4				0x0020
++#define SPI_MISO_E4_MASK			BIT(14)
++#define SPI_MOSI_E4_MASK			BIT(13)
++#define SPI_CLK_E4_MASK				BIT(12)
++#define SPI_CS0_E4_MASK				BIT(11)
++#define PCIE1_RESET_E4_MASK			BIT(9)
++#define PCIE0_RESET_E4_MASK			BIT(8)
++#define UART1_RXD_E4_MASK			BIT(3)
++#define UART1_TXD_E4_MASK			BIT(2)
++#define I2C_SCL_E4_MASK				BIT(1)
++#define I2C_SDA_E4_MASK				BIT(0)
++
++#define REG_GPIO_L_E2				0x0024
++#define REG_GPIO_L_E4				0x0028
++
++#define REG_I2C_SDA_PU				0x0044
++#define SPI_MISO_PU_MASK			BIT(14)
++#define SPI_MOSI_PU_MASK			BIT(13)
++#define SPI_CLK_PU_MASK				BIT(12)
++#define SPI_CS0_PU_MASK				BIT(11)
++#define PCIE1_RESET_PU_MASK			BIT(9)
++#define PCIE0_RESET_PU_MASK			BIT(8)
++#define UART1_RXD_PU_MASK			BIT(3)
++#define UART1_TXD_PU_MASK			BIT(2)
++#define I2C_SCL_PU_MASK				BIT(1)
++#define I2C_SDA_PU_MASK				BIT(0)
++
++#define REG_I2C_SDA_PD				0x0048
++#define SPI_MISO_PD_MASK			BIT(14)
++#define SPI_MOSI_PD_MASK			BIT(13)
++#define SPI_CLK_PD_MASK				BIT(12)
++#define SPI_CS0_PD_MASK				BIT(11)
++#define PCIE1_RESET_PD_MASK			BIT(9)
++#define PCIE0_RESET_PD_MASK			BIT(8)
++#define UART1_RXD_PD_MASK			BIT(3)
++#define UART1_TXD_PD_MASK			BIT(2)
++#define I2C_SCL_PD_MASK				BIT(1)
++#define I2C_SDA_PD_MASK				BIT(0)
++
++#define REG_GPIO_L_PU				0x004c
++#define REG_GPIO_L_PD				0x0050
++
++#define REG_PCIE_RESET_OD			0x018c
++#define PCIE1_RESET_OD_MASK			BIT(1)
++#define PCIE0_RESET_OD_MASK			BIT(0)
++
++/* PWM MODE CONF */
++#define REG_GPIO_FLASH_MODE_CFG			0x0034
++#define GPIO15_FLASH_MODE_CFG			BIT(15)
++#define GPIO14_FLASH_MODE_CFG			BIT(14)
++#define GPIO13_FLASH_MODE_CFG			BIT(13)
++#define GPIO12_FLASH_MODE_CFG			BIT(12)
++#define GPIO11_FLASH_MODE_CFG			BIT(11)
++#define GPIO10_FLASH_MODE_CFG			BIT(10)
++#define GPIO9_FLASH_MODE_CFG			BIT(9)
++#define GPIO8_FLASH_MODE_CFG			BIT(8)
++#define GPIO7_FLASH_MODE_CFG			BIT(7)
++#define GPIO6_FLASH_MODE_CFG			BIT(6)
++#define GPIO5_FLASH_MODE_CFG			BIT(5)
++#define GPIO4_FLASH_MODE_CFG			BIT(4)
++#define GPIO3_FLASH_MODE_CFG			BIT(3)
++#define GPIO2_FLASH_MODE_CFG			BIT(2)
++#define GPIO1_FLASH_MODE_CFG			BIT(1)
++#define GPIO0_FLASH_MODE_CFG			BIT(0)
++
++/* PWM MODE CONF EXT */
++#define REG_GPIO_FLASH_MODE_CFG_EXT		0x0068
++#define GPIO37_FLASH_MODE_CFG			BIT(17)
++#define GPIO36_FLASH_MODE_CFG			BIT(16)
++#define GPIO31_FLASH_MODE_CFG			BIT(15)
++#define GPIO30_FLASH_MODE_CFG			BIT(14)
++#define GPIO29_FLASH_MODE_CFG			BIT(13)
++#define GPIO28_FLASH_MODE_CFG			BIT(12)
++#define GPIO27_FLASH_MODE_CFG			BIT(11)
++#define GPIO26_FLASH_MODE_CFG			BIT(10)
++#define GPIO25_FLASH_MODE_CFG			BIT(9)
++#define GPIO24_FLASH_MODE_CFG			BIT(8)
++#define GPIO23_FLASH_MODE_CFG			BIT(7)
++#define GPIO22_FLASH_MODE_CFG			BIT(6)
++#define GPIO21_FLASH_MODE_CFG			BIT(5)
++#define GPIO20_FLASH_MODE_CFG			BIT(4)
++#define GPIO19_FLASH_MODE_CFG			BIT(3)
++#define GPIO18_FLASH_MODE_CFG			BIT(2)
++#define GPIO17_FLASH_MODE_CFG			BIT(1)
++#define GPIO16_FLASH_MODE_CFG			BIT(0)
++
++/* PWM */
++#define AIROHA_PINCTRL_PWM(gpio, mux_val)			\
++	{							\
++		.name = (gpio),					\
++		.regmap[0] = {					\
++			AIROHA_FUNC_PWM_MUX,			\
++			REG_GPIO_FLASH_MODE_CFG,		\
++			(mux_val),				\
++			(mux_val)				\
++		},						\
++		.regmap_size = 1,				\
++	}
++
++#define AIROHA_PINCTRL_PWM_EXT(gpio, mux_val)			\
++	{							\
++		.name = (gpio),					\
++		.regmap[0] = {					\
++			AIROHA_FUNC_PWM_EXT_MUX,		\
++			REG_GPIO_FLASH_MODE_CFG_EXT,		\
++			(mux_val),				\
++			(mux_val)				\
++		},						\
++		.regmap_size = 1,				\
++	}
++
++#define AIROHA_PINCTRL_PHY_LED0(gpio, mux_val, map_mask, map_val)	\
++	{								\
++		.name = (gpio),						\
++		.regmap[0] = {						\
++			AIROHA_FUNC_MUX,				\
++			REG_GPIO_2ND_I2C_MODE,				\
++			(mux_val),					\
++			(mux_val),					\
++		},							\
++		.regmap[1] = {						\
++			AIROHA_FUNC_MUX,				\
++			REG_LAN_LED0_MAPPING,				\
++			(map_mask),					\
++			(map_val),					\
++		},							\
++		.regmap_size = 2,					\
++	}
++
++#define AIROHA_PINCTRL_PHY_LED1(gpio, mux_val, map_mask, map_val)	\
++	{								\
++		.name = (gpio),						\
++		.regmap[0] = {						\
++			AIROHA_FUNC_MUX,				\
++			REG_GPIO_2ND_I2C_MODE,				\
++			(mux_val),					\
++			(mux_val),					\
++		},							\
++		.regmap[1] = {						\
++			AIROHA_FUNC_MUX,				\
++			REG_LAN_LED1_MAPPING,				\
++			(map_mask),					\
++			(map_val),					\
++		},							\
++		.regmap_size = 2,					\
++	}
++
++static const char *const pon_groups[] = { "pon" };
++
++static const struct airoha_pinctrl_func_group pon_func_group[] = {
++	{
++		.name = "pon",
++		.regmap[0] = {
++			AIROHA_FUNC_MUX,
++			REG_GPIO_PON_MODE,
++			GPIO_PON_MODE_MASK,
++			GPIO_PON_MODE_MASK
++		},
++		.regmap_size = 1,
++	},
++};
++
++static const char *const sipo_groups[] = { "sipo", "sipo_rclk" };
++
++static const struct airoha_pinctrl_func_group sipo_func_group[] = {
++	{
++		.name = "sipo",
++		.regmap[0] = {
++			AIROHA_FUNC_MUX,
++			REG_GPIO_PON_MODE,
++			GPIO_SIPO_MODE_MASK | SIPO_RCLK_MODE_MASK,
++			GPIO_SIPO_MODE_MASK
++		},
++		.regmap_size = 1,
++	}, {
++		.name = "sipo_rclk",
++		.regmap[0] = {
++			AIROHA_FUNC_MUX,
++			REG_GPIO_PON_MODE,
++			GPIO_SIPO_MODE_MASK | SIPO_RCLK_MODE_MASK,
++			GPIO_SIPO_MODE_MASK | SIPO_RCLK_MODE_MASK
++		},
++		.regmap_size = 1,
++	},
++};
++
++static const char *const jtag_groups[] = { "jtag_udi", "jtag_dfd" };
++
++static const struct airoha_pinctrl_func_group jtag_func_group[] = {
++	{
++		.name = "jtag_udi",
++		.regmap[0] = {
++			AIROHA_FUNC_MUX,
++			REG_NPU_UART_EN,
++			JTAG_UDI_EN_MASK,
++			JTAG_UDI_EN_MASK
++		},
++		.regmap_size = 1,
++	}, {
++		.name = "jtag_dfd",
++		.regmap[0] = {
++			AIROHA_FUNC_MUX,
++			REG_NPU_UART_EN,
++			JTAG_DFD_EN_MASK,
++			JTAG_DFD_EN_MASK
++		},
++		.regmap_size = 1,
++	},
++};
++
++static const char *const pcm_groups[] = { "pcm1", "pcm2" };
++
++static const struct airoha_pinctrl_func_group pcm_func_group[] = {
++	{
++		.name = "pcm1",
++		.regmap[0] = {
++			AIROHA_FUNC_MUX,
++			REG_GPIO_SPI_CS1_MODE,
++			GPIO_PCM1_MODE_MASK,
++			GPIO_PCM1_MODE_MASK
++		},
++		.regmap_size = 1,
++	}, {
++		.name = "pcm2",
++		.regmap[0] = {
++			AIROHA_FUNC_MUX,
++			REG_GPIO_SPI_CS1_MODE,
++			GPIO_PCM2_MODE_MASK,
++			GPIO_PCM2_MODE_MASK
++		},
++		.regmap_size = 1,
++	},
++};
++
++static const char *const pnand_groups[] = { "pnand" };
++
++static const struct airoha_pinctrl_func_group pnand_func_group[] = {
++	{
++		.name = "pnand",
++		.regmap[0] = {
++			AIROHA_FUNC_MUX,
++			REG_GPIO_PON_MODE,
++			GPIO_PARALLEL_NAND_MODE_MASK,
++			GPIO_PARALLEL_NAND_MODE_MASK
++		},
++		.regmap_size = 1,
++	},
++};
++
 +#define AN7563_UART_RXD_GPIO_MODE_MASK		BIT(22)
 +#define AN7563_UART_TXD_GPIO_MODE_MASK		BIT(21)
 +#define AN7563_SPI_MISO_GPIO_MODE_MASK		BIT(20)
@@ -26,13 +374,6 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
 +#define AN7563_SPI_CLK_GPIO_MODE_MASK		BIT(17)
 +#define AN7563_I2C_SDA_GPIO_MODE_MASK		BIT(16)
 +#define AN7563_I2C_SCL_GPIO_MODE_MASK		BIT(15)
- #define GPIO_PARALLEL_NAND_MODE_MASK		BIT(14)
- #define GPIO_SGMII_MDIO_MODE_MASK		BIT(13)
- #define GPIO_PCIE_RESET2_MASK			BIT(12)
-@@ -854,18 +862,177 @@ static const struct pingroup an7583_pinc
- 	PINCTRL_PIN_GROUP("pcie_reset1", an7583_pcie_reset1),
- };
- 
 +
 +static struct pinctrl_pin_desc an7563_pinctrl_pins[] = {
 +	PINCTRL_PIN(0, "gpio0"),
@@ -189,28 +530,9 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
 +	PINCTRL_PIN_GROUP("pcie_reset1", an7563_pcie_reset1),
 +};
 +
- static const char *const pon_groups[] = { "pon" };
- static const char *const tod_1pps_groups[] = { "pon_tod_1pps", "gsw_tod_1pps" };
- static const char *const sipo_groups[] = { "sipo", "sipo_rclk" };
- static const char *const mdio_groups[] = { "mdio" };
- static const char *const an7583_mdio_groups[] = { "mdio" };
 +static const char *const an7563_mdio_groups[] = { "mdio" };
- static const char *const uart_groups[] = { "uart2", "uart2_cts_rts", "hsuart",
- 					   "hsuart_cts_rts", "uart4",
- 					   "uart5" };
- static const char *const i2c_groups[] = { "i2c1" };
 +static const char *const an7563_i2c_groups[] = { "i2c" };
- static const char *const jtag_groups[] = { "jtag_udi", "jtag_dfd" };
- static const char *const pcm_groups[] = { "pcm1", "pcm2" };
- static const char *const spi_groups[] = { "spi_quad", "spi_cs1" };
 +static const char *const an7563_spi_groups[] = { "spi", "spi_quad", "spi_cs1" };
- static const char *const pcm_spi_groups[] = { "pcm_spi", "pcm_spi_int",
- 					      "pcm_spi_rst", "pcm_spi_cs1",
- 					      "pcm_spi_cs2_p156",
-@@ -881,6 +1048,13 @@ static const char *const pnand_groups[]
- static const char *const pcie_reset_groups[] = { "pcie_reset0", "pcie_reset1",
- 						 "pcie_reset2" };
- static const char *const an7583_pcie_reset_groups[] = { "pcie_reset0", "pcie_reset1" };
 +static const char *const an7563_pcie_reset_groups[] = { "pcie_reset0", "pcie_reset1" };
 +static const char *const an7563_uart_groups[] = { "hsuart", "hsuart_cts_rts" };
 +static const char *const an7563_gpio_groups[] = { "gpio28", "gpio29",
@@ -218,13 +540,6 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
 +						  "gpio32", "gpio33",
 +						  "gpio34", "gpio35",
 +						  "gpio36", "gpio37" };
- static const char *const pwm_groups[] = { "gpio0", "gpio1",
- 					  "gpio2", "gpio3",
- 					  "gpio4", "gpio5",
-@@ -927,6 +1101,39 @@ static const char *const phy3_led1_group
- 						"gpio45", "gpio46" };
- static const char *const phy4_led1_groups[] = { "gpio43", "gpio44",
- 						"gpio45", "gpio46" };
 +static const char *const an7563_pwm_groups[] = { "gpio0", "gpio1",
 +						 "gpio2", "gpio3",
 +						 "gpio4", "gpio5",
@@ -258,13 +573,6 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
 +							"gpio6", "gpio7" };
 +static const char *const an7563_phy4_led1_groups[] = { "gpio4", "gpio5",
 +							"gpio6", "gpio7" };
- static const char *const an7583_phy1_led0_groups[] = { "gpio1", "gpio2",
- 							"gpio3", "gpio4" };
- static const char *const an7583_phy2_led0_groups[] = { "gpio1", "gpio2",
-@@ -1020,6 +1227,69 @@ static const struct airoha_pinctrl_func_
- 	},
- };
- 
 +
 +static const struct airoha_pinctrl_func_group an7563_mdio_func_group[] = {
 +	{
@@ -328,14 +636,6 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
 +	},
 +};
 +
- static const struct airoha_pinctrl_func_group an7583_mdio_func_group[] = {
- 	{
- 		.name = "mdio",
-@@ -1417,6 +1687,54 @@ static const struct airoha_pinctrl_func_
- 	},
- };
- 
-+
 +static const struct airoha_pinctrl_func_group an7563_pcie_reset_func_group[] = {
 +	{
 +		.name = "pcie_reset0",
@@ -383,13 +683,6 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
 +	AIROHA_PINCTRL_AN7563_GPIO("gpio37", AN7563_UART_RXD_GPIO_MODE_MASK),
 +};
 +
- static const struct airoha_pinctrl_func_group an7583_pcie_reset_func_group[] = {
- 	{
- 		.name = "pcie_reset0",
-@@ -1464,6 +1782,68 @@ static const struct airoha_pinctrl_func_
- 		.regmap_size = 1,			\
- 	}						\
- 
 +#define AIROHA_PINCTRL_PWM_EXT_MUX(gpio, mux_val, smux_val)	\
 +	{							\
 +		.name = (gpio),					\
@@ -407,7 +700,6 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
 +		},						\
 +		.regmap_size = 2,				\
 +	}
-+
 +
 +static const struct airoha_pinctrl_func_group an7563_pwm_func_group[] = {
 +	AIROHA_PINCTRL_PWM("gpio0", GPIO0_FLASH_MODE_CFG),
@@ -451,14 +743,6 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
 +	AIROHA_PINCTRL_PWM_EXT_MUX("gpio37", GPIO37_FLASH_MODE_CFG,
 +					     AN7563_UART_RXD_GPIO_MODE_MASK),
 +};
-+
- static const struct airoha_pinctrl_func_group pwm_func_group[] = {
- 	AIROHA_PINCTRL_PWM("gpio0", GPIO0_FLASH_MODE_CFG),
- 	AIROHA_PINCTRL_PWM("gpio1", GPIO1_FLASH_MODE_CFG),
-@@ -1667,6 +2047,95 @@ static const struct airoha_pinctrl_func_
- 				LAN3_LED_MAPPING_MASK, LAN3_PHY_LED_MAP(2)),
- };
- 
 +
 +static const struct airoha_pinctrl_func_group an7563_phy1_led0_func_group[] = {
 +	AIROHA_PINCTRL_PHY_LED0("gpio8", GPIO_LAN0_LED0_MODE_MASK,
@@ -548,14 +832,6 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
 +				LAN0_LED_MAPPING_MASK, LAN0_PHY_LED_MAP(3)),
 +};
 +
- static const struct airoha_pinctrl_func_group an7583_phy1_led0_func_group[] = {
- 	AIROHA_PINCTRL_PHY_LED0("gpio1", GPIO_LAN0_LED0_MODE_MASK,
- 				LAN0_LED_MAPPING_MASK, LAN0_PHY_LED_MAP(0)),
-@@ -1781,6 +2250,30 @@ static const struct airoha_pinctrl_func
- 	PINCTRL_FUNC_DESC("phy4_led1", phy4_led1),
- };
- 
-+
 +static const struct airoha_pinctrl_func an7563_pinctrl_funcs[] = {
 +	PINCTRL_FUNC_DESC("pon", pon),
 +	PINCTRL_FUNC_DESC("sipo", sipo),
@@ -579,13 +855,6 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
 +	PINCTRL_FUNC_DESC("phy4_led1", an7563_phy4_led1),
 +};
 +
- static const struct airoha_pinctrl_func an7583_pinctrl_funcs[] = {
- 	PINCTRL_FUNC_DESC("pon", pon),
- 	PINCTRL_FUNC_DESC("tod_1pps", tod_1pps),
-@@ -1867,6 +2360,175 @@ static const struct airoha_pinctrl_conf
- 	PINCTRL_CONF_DESC(63, REG_I2C_SDA_PU, PCIE2_RESET_PU_MASK),
- };
- 
 +static const struct airoha_pinctrl_conf an7563_pinctrl_pullup_conf[] = {
 +	PINCTRL_CONF_DESC(0, REG_GPIO_L_PU, BIT(0)),
 +	PINCTRL_CONF_DESC(1, REG_GPIO_L_PU, BIT(1)),
@@ -755,15 +1024,10 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
 +	PINCTRL_CONF_DESC(29, REG_PCIE_RESET_OD, PCIE1_RESET_OD_MASK),
 +};
 +
- static const struct airoha_pinctrl_conf an7583_pinctrl_pullup_conf[] = {
- 	PINCTRL_CONF_DESC(2, REG_GPIO_L_PU, BIT(0)),
- 	PINCTRL_CONF_DESC(3, REG_GPIO_L_PU, BIT(1)),
-@@ -3016,6 +3678,38 @@ static const struct airoha_pinctrl_match
- 	},
- };
- 
-+
 +static const struct airoha_pinctrl_match_data an7563_pinctrl_match_data = {
++	.chip_scu_compatible = "airoha,an7563-chip-scu",
++	.pinctrl_name = KBUILD_MODNAME,
++	.pinctrl_owner = THIS_MODULE,
 +	.pins = an7563_pinctrl_pins,
 +	.num_pins = ARRAY_SIZE(an7563_pinctrl_pins),
 +	.grps = an7563_pinctrl_groups,
@@ -793,15 +1057,21 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
 +		},
 +	},
 +};
-+
- static const struct airoha_pinctrl_match_data an7583_pinctrl_match_data = {
- 	.pins = an7583_pinctrl_pins,
- 	.num_pins = ARRAY_SIZE(an7583_pinctrl_pins),
-@@ -3049,6 +3743,7 @@ static const struct airoha_pinctrl_match
- 
- static const struct of_device_id airoha_pinctrl_of_match[] = {
- 	{ .compatible = "airoha,en7581-pinctrl", .data = &en7581_pinctrl_match_data },
++static const struct of_device_id airoha_pinctrl_of_match[] = {
 +	{ .compatible = "airoha,an7563-pinctrl", .data = &an7563_pinctrl_match_data },
- 	{ .compatible = "airoha,an7583-pinctrl", .data = &an7583_pinctrl_match_data },
- 	{ /* sentinel */ }
- };
++	{ /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(of, airoha_pinctrl_of_match);
++
++static struct platform_driver airoha_pinctrl_driver = {
++	.probe = airoha_pinctrl_probe,
++	.driver = {
++		.name = "pinctrl-airoha-an7563",
++		.of_match_table = airoha_pinctrl_of_match,
++	},
++};
++module_platform_driver(airoha_pinctrl_driver);
++
++MODULE_LICENSE("GPL");
++MODULE_AUTHOR("Ray Liu <ray.xy.liu@gmail.com>");
++MODULE_DESCRIPTION("Pinctrl driver for Airoha AN7563 SoC");

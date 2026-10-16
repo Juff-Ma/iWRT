@@ -12,9 +12,13 @@ export function parse_bool(val)
 	switch (val) {
 	case "1":
 	case "true":
+	case true:
+	case 1:
 		return true;
 	case "0":
 	case "false":
+	case false:
+	case 0:
 		return false;
 	}
 };
@@ -54,8 +58,8 @@ export function handler_load(path, cb)
 		system(`./${script} "" "dump" >&${f.fileno()}`);
 		chdir(prev_dir);
 		f.seek();
-		while (!f.error()) {
-			let data = trim(f.read("line"));
+		for (let line = f.read("line"); length(line); line = f.read("line")) {
+			let data = trim(line);
 			try {
 				data = json(data);
 			} catch (e) {

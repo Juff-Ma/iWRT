@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=xs2184-2210
 PKG_VERSION:=1.0.1
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)
 
@@ -18,7 +18,7 @@ define Package/xs2184-2210
 	CATEGORY:=Independent
 	TITLE:=XinSheng PoE/PSE i2c driver
 	URL:=http://www.tt-cool.com/xs2184
-	DEPENDS:= +i2c-tools +libuci @TARGET_mediatek_filogic
+	DEPENDS:= +i2c-tools +libuci +@BUSYBOX_CONFIG_FLOCK @TARGET_mediatek_filogic
 endef
 
 define Package/xs2184-2210/description

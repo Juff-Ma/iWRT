@@ -81,6 +81,14 @@
 	};
 };
 
+&gpio1 {
+	status = "okay";
+};
+
+&gpio2 {
+	status = "okay";
+};
+
 &gpio3 {
 	status = "okay";
 };
@@ -172,7 +180,7 @@
 
 &state_default {
 	gpio {
-		groups = "wled", "i2c", "uartf", "wdt";
+		groups = "wled", "i2c", "uartf", "wdt", "rgmii1", "rgmii2";
 		function = "gpio";
 	};
 };

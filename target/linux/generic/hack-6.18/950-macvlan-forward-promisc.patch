@@ -1,6 +1,6 @@
 --- a/drivers/net/macvlan.c
 +++ b/drivers/net/macvlan.c
-@@ -424,6 +424,35 @@ static void macvlan_forward_source_one(s
+@@ -424,6 +424,39 @@ static void macvlan_forward_source_one(s
  	macvlan_count_rx(vlan, len, ret == NET_RX_SUCCESS, false);
  }
  
@@ -11,6 +11,10 @@
 +	struct net_device *dev;
 +	int len;
 +	int ret;
++
++	/* Passthru already delivers every unicast frame to this device. */
++	if (vlan->mode == MACVLAN_MODE_PASSTHRU)
++		return;
 +
 +	dev = vlan->dev;
 +	if (unlikely(!(dev->flags & IFF_UP)))
@@ -36,7 +40,7 @@
  static bool macvlan_forward_source(struct sk_buff *skb,
  				   struct macvlan_port *port,
  				   const unsigned char *addr)
-@@ -499,6 +528,13 @@ static rx_handler_result_t macvlan_handl
+@@ -499,6 +532,13 @@ static rx_handler_result_t macvlan_handl
  		return RX_HANDLER_PASS;
  	}
  

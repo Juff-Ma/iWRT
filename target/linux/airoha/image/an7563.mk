@@ -19,11 +19,17 @@ define Build/an7563-bl2-bl31-uboot
   truncate -s $$((0x80000)) $@
 endef
 
+define Build/tenda-mkdualimageheader
+	printf '%b' "\x47\x6f\x64\x31\x00\x00\x00\x00" >"$@.new"
+	libdeflate-gzip -c "$@" | tail -c8 >>"$@.new"
+	cat "$@" >>"$@.new"
+	mv "$@.new" "$@"
+endef
+
 define Device/airoha_an7563-evb
   DEVICE_VENDOR := Airoha
   DEVICE_MODEL := AN7563 Evaluation Board
   DEVICE_DTS := an7563-evb
-  DEVICE_PACKAGES += kmod-i2c-an7581
   KERNEL_LOADADDR := 0x80088000
   ARTIFACT/preloader.bin := an7563-preloader rfb
   ARTIFACT/bl2-bl31-uboot.bin := an7563-bl2-bl31-uboot rfb
@@ -31,14 +37,45 @@ define Device/airoha_an7563-evb
 endef
 TARGET_DEVICES += airoha_an7563-evb
 
+define Device/tenda_be6l-pro
+  DEVICE_VENDOR := Tenda
+  DEVICE_MODEL := BE6L Pro
+  DEVICE_DTS := an7563-tenda-be6l-pro
+  DEVICE_PACKAGES := kmod-mt7992-23-firmware kmod-phy-airoha-en8811h \
+	airoha-en8811h-firmware
+  KERNEL_LOADADDR := 0x80088000
+  KERNEL_SIZE := 6144k
+  KERNEL_INITRAMFS := kernel-bin | lzma | \
+	fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb with-initrd | pad-to 64k
+  BLOCKSIZE := 128k
+  PAGESIZE := 2048
+  UBINIZE_OPTS := -E 5
+  IMAGE/sysupgrade.bin := append-kernel | tenda-mkdualimageheader | \
+	check-size $$$$(KERNEL_SIZE) | sysupgrade-tar kernel=$$$$@ | append-metadata
+endef
+TARGET_DEVICES += tenda_be6l-pro
+
 define Device/xiaomi_be5000
   DEVICE_VENDOR := Xiaomi
   DEVICE_MODEL := BE5000
   DEVICE_DTS := an7563-xiaomi-be5000
-  DEVICE_PACKAGES += kmod-i2c-an7581
+  DEVICE_PACKAGES := kmod-leds-pwm kmod-pwm-airoha \
+	kmod-mt7992-23-firmware kmod-phy-airoha-en8811h \
+	airoha-en8811h-firmware
   KERNEL_LOADADDR := 0x80088000
+  KERNEL_SIZE := 6144k
+  KERNEL_INITRAMFS := kernel-bin | lzma | \
+	fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb with-initrd | pad-to 64k
+  BLOCKSIZE := 128k
+  PAGESIZE := 2048
+  UBINIZE_OPTS := -E 5
+  IMAGE/sysupgrade.bin := append-kernel | check-size $$$$(KERNEL_SIZE) | \
+	sysupgrade-tar kernel=$$$$@ | append-metadata
   ARTIFACT/preloader.bin := an7563-preloader xiaomi_be5000
   ARTIFACT/bl2-bl31-uboot.bin := an7563-bl2-bl31-uboot xiaomi_be5000
   ARTIFACTS := preloader.bin bl2-bl31-uboot.bin
+  DEVICE_COMPAT_VERSION := 2.0
+  DEVICE_COMPAT_MESSAGE := Flash layout changed; install the matching \
+	OpenWrt U-Boot artifact before upgrading
 endef
 TARGET_DEVICES += xiaomi_be5000

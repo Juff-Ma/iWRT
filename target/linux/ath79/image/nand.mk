@@ -5,10 +5,11 @@ define Build/dongwon-header
 	( \
 		header_crc="$$(head -c 68 $@.tmp | libdeflate-gzip -c | \
 			tail -c 8 | od -An -N4 -tx4 --endian little | tr -d ' \n')"; \
-		printf "$$(echo $$header_crc | sed 's/../\\x&/g')" | \
-			dd of=$@.tmp bs=4 count=1 seek=1 conv=notrunc \
-	)
-	mv $@.tmp $@
+		head -c 4 $@.tmp; \
+		printf "$$(echo $$header_crc | sed 's/../\\x&/g')"; \
+		tail -c +9 $@.tmp; \
+	) > $@
+	rm -f $@.tmp
 endef
 
 define Build/meraki-header
@@ -144,7 +145,7 @@ define Device/domywifi_dw33d-nor
   IMAGE/sysupgrade.bin := append-kernel | pad-to $$$$(BLOCKSIZE) | append-rootfs | pad-rootfs | \
 			  append-metadata | check-size
   IMAGE/breed-factory.bin := append-rootfs-64k | append-kernel | pad-to $$$$(BLOCKSIZE) | append-rootfs | pad-rootfs | \
-			     pad-to 14528k | append-okli-kernel $(1)
+			     pad-to 14528k | append-okli-kernel $(1) | check-size 16000k
 endef
 TARGET_DEVICES += domywifi_dw33d-nor
 

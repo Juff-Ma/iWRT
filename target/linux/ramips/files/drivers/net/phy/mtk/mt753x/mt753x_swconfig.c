@@ -179,7 +179,7 @@ static int mt753x_get_vlan_ports(struct switch_dev *dev, struct switch_val *val)
 	struct gsw_mt753x *gsw = container_of(dev, struct gsw_mt753x, swdev);
 	u32 member;
 	u32 etags;
-	int i;
+	int i, ret;
 
 	val->len = 0;
 
@@ -188,15 +188,22 @@ static int mt753x_get_vlan_ports(struct switch_dev *dev, struct switch_val *val)
 
 	mutex_lock(&gsw->reg_mutex);
 
-	mt753x_vlan_ctrl(gsw, VTCR_READ_VLAN_ENTRY, val->port_vlan);
+	ret = mt753x_vlan_ctrl(gsw, VTCR_READ_VLAN_ENTRY,
+	                       gsw->vlan_entries[val->port_vlan].vid);
+	if (ret)
+		goto out;
 
-	member = mt753x_reg_read(gsw, VAWD1);
+	ret = mt753x_reg_read_checked(gsw, VAWD1, &member);
+	if (ret < 0)
+		goto out;
 	member &= PORT_MEM_M;
 	member >>= PORT_MEM_S;
 
-	etags = mt753x_reg_read(gsw, VAWD2);
-
+	ret = mt753x_reg_read_checked(gsw, VAWD2, &etags);
+out:
 	mutex_unlock(&gsw->reg_mutex);
+	if (ret)
+		return ret;
 
 	for (i = 0; i < MT753X_NUM_PORTS; i++) {
 		struct switch_port *p;
@@ -274,7 +281,12 @@ static int mt753x_get_vid(struct switch_dev *dev,
                           const struct switch_attr *attr,
                           struct switch_val *val)
 {
-	val->value.i = val->port_vlan;
+	struct gsw_mt753x *gsw = container_of(dev, struct gsw_mt753x, swdev);
+
+	if (val->port_vlan < 0 || val->port_vlan >= MT753X_NUM_VLANS)
+		return -EINVAL;
+
+	val->value.i = gsw->vlan_entries[val->port_vlan].vid;
 	return 0;
 }
 
@@ -283,15 +295,18 @@ static int mt753x_get_port_link(struct switch_dev *dev, int port,
 {
 	struct gsw_mt753x *gsw = container_of(dev, struct gsw_mt753x, swdev);
 	u32 speed, pmsr;
+	int ret;
 
 	if (port < 0 || port >= MT753X_NUM_PORTS)
 		return -EINVAL;
 
 	mutex_lock(&gsw->reg_mutex);
 
-	pmsr = mt753x_reg_read(gsw, PMSR(port));
+	ret = mt753x_reg_read_checked(gsw, PMSR(port), &pmsr);
 
 	mutex_unlock(&gsw->reg_mutex);
+	if (ret < 0)
+		return ret;
 
 	link->link = pmsr & MAC_LNK_STS;
 	link->duplex = pmsr & MAC_DPX_STS;
@@ -319,6 +334,9 @@ static int mt753x_get_port_link(struct switch_dev *dev, int port,
 static int mt753x_set_port_link(struct switch_dev *dev, int port,
                                 struct switch_port_link *link)
 {
+	u16 bmcr = 0;
+	int ret;
+
 	if (port < 0 || port >= MT753X_NUM_PHYS)
 		return -EINVAL;
 
@@ -327,12 +345,15 @@ static int mt753x_set_port_link(struct switch_dev *dev, int port,
 		u16 bmsr, adv, gctrl;
 		bool ercap;
 
-		dev->ops->phy_read16(dev, port, MII_BMSR, &bmsr);
+		ret = dev->ops->phy_read16(dev, port, MII_BMSR, &bmsr);
+		if (ret)
+			return ret;
 		/* ERCAP means we have MII_CTRL1000 register */
 		ercap = !!(bmsr | BMSR_ERCAP);
 
 		adv = ADVERTISE_CSMA | ADVERTISE_PAUSE_CAP | ADVERTISE_PAUSE_ASYM;
-		gctrl = CTL1000_ENABLE_MASTER;
+		/* Let the PHY negotiate the master/slave role automatically. */
+		gctrl = 0;
 
 		switch (link->speed) {
 		case SWITCH_PORT_SPEED_10:
@@ -365,38 +386,87 @@ static int mt753x_set_port_link(struct switch_dev *dev, int port,
 			break;
 		}
 
-		dev->ops->phy_write16(dev, port, MII_ADVERTISE, adv);
-		if (ercap)
-			dev->ops->phy_write16(dev, port, MII_CTRL1000, gctrl);
-		/* Autoneg restart will be triggered in switch_generic_set_link */
+		ret = dev->ops->phy_write16(dev, port, MII_ADVERTISE, adv);
+		if (ret)
+			return ret;
+		if (ercap) {
+			ret = dev->ops->phy_write16(dev, port, MII_CTRL1000, gctrl);
+			if (ret)
+				return ret;
+		}
+
+		ret = dev->ops->phy_write16(dev, port, MII_BMCR, 0);
+		if (ret)
+			return ret;
+		return dev->ops->phy_write16(dev, port, MII_BMCR,
+		                             BMCR_ANENABLE | BMCR_ANRESTART);
 	}
 
-	/* Let switch_generic_set_link handle not autoneg case */
-	return switch_generic_set_link(dev, port, link);
+	if (link->duplex)
+		bmcr |= BMCR_FULLDPLX;
+
+	switch (link->speed) {
+	case SWITCH_PORT_SPEED_10:
+		break;
+	case SWITCH_PORT_SPEED_100:
+		bmcr |= BMCR_SPEED100;
+		break;
+	case SWITCH_PORT_SPEED_1000:
+		bmcr |= BMCR_SPEED1000;
+		break;
+	default:
+		return -ENOTSUPP;
+	}
+
+	return dev->ops->phy_write16(dev, port, MII_BMCR, bmcr);
 }
 
-static u64 get_mib_counter(struct gsw_mt753x *gsw, int i, int port)
+static int get_mib_counter(struct gsw_mt753x *gsw, int i, int port,
+                           u64 *counter)
 {
 	unsigned int offset;
-	u64 lo, hi, hi2;
+	u32 lo, hi, hi2;
+	int ret;
 
 	offset = mt753x_mibs[i].offset;
 
-	if (mt753x_mibs[i].size == 1)
-		return mt753x_reg_read(gsw, MIB_COUNTER_REG(port, offset));
+	if (mt753x_mibs[i].size == 1) {
+		ret = mt753x_reg_read_checked(gsw, MIB_COUNTER_REG(port, offset), &lo);
+		if (ret < 0)
+			return ret;
+		*counter = lo;
+		return 0;
+	}
 
 	do {
-		hi = mt753x_reg_read(gsw, MIB_COUNTER_REG(port, offset + 4));
-		lo = mt753x_reg_read(gsw, MIB_COUNTER_REG(port, offset));
-		hi2 = mt753x_reg_read(gsw, MIB_COUNTER_REG(port, offset + 4));
+		ret = mt753x_reg_read_checked(gsw, MIB_COUNTER_REG(port, offset + 4), &hi);
+		if (ret < 0)
+			return ret;
+		ret = mt753x_reg_read_checked(gsw, MIB_COUNTER_REG(port, offset), &lo);
+		if (ret < 0)
+			return ret;
+		ret = mt753x_reg_read_checked(gsw, MIB_COUNTER_REG(port, offset + 4), &hi2);
+		if (ret < 0)
+			return ret;
 	} while (hi2 != hi);
 
-	return (hi << 32) | lo;
+	*counter = ((u64)hi << 32) | lo;
+	return 0;
 }
 
-static u64 get_mib_counter_7620(struct gsw_mt753x *gsw, int i)
+static int get_mib_counter_7620(struct gsw_mt753x *gsw, int i, u64 *counter)
 {
-	return mt753x_reg_read(gsw, MT7620_MIB_COUNTER_BASE + mt7620_mibs[i].offset);
+	u32 value;
+	int ret;
+
+	ret = mt753x_reg_read_checked(gsw,
+	                              MT7620_MIB_COUNTER_BASE + mt7620_mibs[i].offset,
+	                              &value);
+	if (ret < 0)
+		return ret;
+
+	*counter = value;
+	return 0;
 }
 
 static int mt753x_get_port_mib(struct switch_dev *dev,
@@ -424,8 +494,10 @@ static int mt753x_get_port_mib(struct switch_dev *dev,
 		len += ret;
 
 		mutex_lock(&gsw->reg_mutex);
-		counter = get_mib_counter(gsw, i, val->port_vlan);
+		ret = get_mib_counter(gsw, i, val->port_vlan, &counter);
 		mutex_unlock(&gsw->reg_mutex);
+		if (ret < 0)
+			return ret;
 
 		ret = snprintf(buf + len, sizeof(buf) - len, "%llu\n",
 		                counter);
@@ -444,51 +516,72 @@ static int mt753x_get_port_stats(struct switch_dev *dev, int port,
 {
 	struct gsw_mt753x *gsw = container_of(dev, struct gsw_mt753x, swdev);
 
+	u64 tx_bytes, rx_bytes;
+	int ret;
+
 	if (port < 0 || port >= MT753X_NUM_PORTS)
 		return -EINVAL;
 
 	mutex_lock(&gsw->reg_mutex);
 
-	stats->tx_bytes = get_mib_counter(gsw, MT753X_PORT_MIB_TXB_ID, port);
-	stats->rx_bytes = get_mib_counter(gsw, MT753X_PORT_MIB_RXB_ID, port);
-
+	ret = get_mib_counter(gsw, MT753X_PORT_MIB_TXB_ID, port, &tx_bytes);
+	if (ret < 0)
+		goto out;
+	ret = get_mib_counter(gsw, MT753X_PORT_MIB_RXB_ID, port, &rx_bytes);
+out:
 	mutex_unlock(&gsw->reg_mutex);
+	if (ret < 0)
+		return ret;
+
+	stats->tx_bytes = tx_bytes;
+	stats->rx_bytes = rx_bytes;
 
 	return 0;
 }
 
-static void mt753x_port_isolation(struct gsw_mt753x *gsw)
+static int mt753x_port_isolation(struct gsw_mt753x *gsw)
 {
-	int i;
+	int i, ret;
 
-	for (i = 0; i < MT753X_NUM_PORTS; i++)
-		mt753x_reg_write(gsw, PCR(i),
-		                 BIT(gsw->cpu_port) << PORT_MATRIX_S);
+	for (i = 0; i < MT753X_NUM_PORTS; i++) {
+		ret = mt753x_reg_write(gsw, PCR(i),
+		                       BIT(gsw->cpu_port) << PORT_MATRIX_S);
+		if (ret < 0)
+			return ret;
+	}
 
-	mt753x_reg_write(gsw, PCR(gsw->cpu_port), PORT_MATRIX_M);
+	ret = mt753x_reg_write(gsw, PCR(gsw->cpu_port), PORT_MATRIX_M);
+	if (ret < 0)
+		return ret;
 
-	for (i = 0; i < MT753X_NUM_PORTS; i++)
-		mt753x_reg_write(gsw, PVC(i),
-		                 (0x8100 << STAG_VPID_S) |
-		                 (VA_TRANSPARENT_PORT << VLAN_ATTR_S));
+	for (i = 0; i < MT753X_NUM_PORTS; i++) {
+		ret = mt753x_reg_write(gsw, PVC(i),
+		                       (0x8100 << STAG_VPID_S) |
+		                       (VA_TRANSPARENT_PORT << VLAN_ATTR_S));
+		if (ret < 0)
+			return ret;
+	}
+
+	return 0;
 }
 
 static int mt753x_apply_config(struct switch_dev *dev)
 {
 	struct gsw_mt753x *gsw = container_of(dev, struct gsw_mt753x, swdev);
+	int ret;
 
 	if (!gsw->global_vlan_enable) {
 		mutex_lock(&gsw->reg_mutex);
-		mt753x_port_isolation(gsw);
+		ret = mt753x_port_isolation(gsw);
 		mutex_unlock(&gsw->reg_mutex);
-		return 0;
+		return ret;
 	}
 
 	mutex_lock(&gsw->reg_mutex);
-	mt753x_apply_vlan_config(gsw);
+	ret = mt753x_apply_vlan_config(gsw);
 	mutex_unlock(&gsw->reg_mutex);
 
-	return 0;
+	return ret;
 }
 
 static int mt753x_reset_switch(struct switch_dev *dev)
@@ -513,10 +606,15 @@ static int mt753x_phy_read16(struct switch_dev *dev, int addr, u8 reg,
 {
 	struct gsw_mt753x *gsw = container_of(dev, struct gsw_mt753x, swdev);
 
-	mutex_lock(&gsw->reg_mutex);
-	*value = gsw->mii_read(gsw, addr, reg);
-	mutex_unlock(&gsw->reg_mutex);
+	int ret;
 
+	mutex_lock(&gsw->reg_mutex);
+	ret = gsw->mii_read(gsw, addr, reg);
+	mutex_unlock(&gsw->reg_mutex);
+	if (ret < 0)
+		return ret;
+
+	*value = ret;
 	return 0;
 }
 
@@ -525,11 +623,13 @@ static int mt753x_phy_write16(struct switch_dev *dev, int addr, u8 reg,
 {
 	struct gsw_mt753x *gsw = container_of(dev, struct gsw_mt753x, swdev);
 
+	int ret;
+
 	mutex_lock(&gsw->reg_mutex);
-	gsw->mii_write(gsw, addr, reg, value);
+	ret = gsw->mii_write(gsw, addr, reg, value);
 	mutex_unlock(&gsw->reg_mutex);
 
-	return 0;
+	return ret;
 }
 
 static int mt753x_sw_get_mib(struct switch_dev *dev,
@@ -553,8 +653,10 @@ static int mt753x_sw_get_mib(struct switch_dev *dev,
 		len += ret;
 
 		mutex_lock(&gsw->reg_mutex);
-		counter = get_mib_counter_7620(gsw, i);
+		ret = get_mib_counter_7620(gsw, i, &counter);
 		mutex_unlock(&gsw->reg_mutex);
+		if (ret < 0)
+			return ret;
 
 		ret = snprintf(buf + len, sizeof(buf) - len, "%llu\n",
 		                counter);
@@ -585,6 +687,9 @@ mt753x_set_mirror_monitor_port(struct switch_dev *dev, const struct switch_attr 
                                struct switch_val *val)
 {
 	struct gsw_mt753x *gsw = container_of(dev, struct gsw_mt753x, swdev);
+
+	if (val->value.i >= MT753X_NUM_PORTS)
+		return -EINVAL;
 
 	gsw->mirror_dest_port = val->value.i;
 
@@ -677,7 +782,7 @@ static int mt753x_get_arl_table(struct switch_dev *dev,
 	size_t size = sizeof(gsw->arl_buf);
 	size_t count = 0;
 	size_t retry_times = 100;
-	int ret;
+	int ret, err = 0;
 	u32 atc;
 
 	mutex_lock(&gsw->reg_mutex);
@@ -690,24 +795,37 @@ static int mt753x_get_arl_table(struct switch_dev *dev,
 	buf += ret;
 	size = size - ret;
 
-	mt753x_reg_write(gsw, REG_ESW_WT_MAC_ATC, REG_MAC_ATC_START);
+	err = mt753x_reg_write(gsw, REG_ESW_WT_MAC_ATC, REG_MAC_ATC_START);
+	if (err < 0)
+		goto out;
 
 	do {
-		atc = mt753x_reg_read(gsw, REG_ESW_WT_MAC_ATC);
+		err = mt753x_reg_read_checked(gsw, REG_ESW_WT_MAC_ATC, &atc);
+		if (err < 0)
+			goto out;
 		if (atc & REG_MAC_ATC_SRCH_HIT && !(atc & REG_MAC_ATC_BUSY)) {
 			u32 atrd;
 
 			++count;
-			atrd = mt753x_reg_read(gsw, REG_ESW_TABLE_ATRD);
+			err = mt753x_reg_read_checked(gsw, REG_ESW_TABLE_ATRD, &atrd);
+			if (err < 0)
+				goto out;
 			if (atrd & REG_ATRD_VALID) {
 				u32 mac1;
 				u32 mac2;
 
-				mac1 = mt753x_reg_read(gsw, REG_ESW_TABLE_TSRA1);
-				mac2 = mt753x_reg_read(gsw, REG_ESW_TABLE_TSRA2);
+				err = mt753x_reg_read_checked(gsw, REG_ESW_TABLE_TSRA1, &mac1);
+				if (err < 0)
+					goto out;
+				err = mt753x_reg_read_checked(gsw, REG_ESW_TABLE_TSRA2, &mac2);
+				if (err < 0)
+					goto out;
 
-				if (!(atc & REG_MAC_ATC_SRCH_END))
-					mt753x_reg_write(gsw, REG_ESW_WT_MAC_ATC, REG_MAC_ATC_NEXT);
+				if (!(atc & REG_MAC_ATC_SRCH_END)) {
+					err = mt753x_reg_write(gsw, REG_ESW_WT_MAC_ATC, REG_MAC_ATC_NEXT);
+					if (err < 0)
+						goto out;
+				}
 
 				buf = mt753x_print_arl_table_row(atrd, mac1, mac2, buf, &size);
 				if (!buf) {
@@ -715,17 +833,24 @@ static int mt753x_get_arl_table(struct switch_dev *dev,
 					goto out;
 				}
 			} else if (!(atc & REG_MAC_ATC_SRCH_END)) {
-				mt753x_reg_write(gsw, REG_ESW_WT_MAC_ATC, REG_MAC_ATC_NEXT);
+				err = mt753x_reg_write(gsw, REG_ESW_WT_MAC_ATC, REG_MAC_ATC_NEXT);
+				if (err < 0)
+					goto out;
 			}
 		} else {
 			--retry_times;
 			usleep_range(1000, 5000);
 		}
-	} while (!(atc & REG_MAC_ATC_SRCH_END) &&
+	} while (((atc & REG_MAC_ATC_BUSY) || !(atc & REG_MAC_ATC_SRCH_END)) &&
 	         count < MT753X_NUM_ARL_RECORDS &&
 	         retry_times > 0);
+	if (!retry_times &&
+	    ((atc & REG_MAC_ATC_BUSY) || !(atc & REG_MAC_ATC_SRCH_END)))
+		err = -ETIMEDOUT;
 out:
 	mutex_unlock(&gsw->reg_mutex);
+	if (err < 0)
+		return err;
 
 	val->value.s = gsw->arl_buf;
 	val->len = strlen(gsw->arl_buf);
@@ -737,7 +862,7 @@ static int mt753x_get_port_power(struct switch_dev *dev,
                                  const struct switch_attr *attr,
                                  struct switch_val *val)
 {
-	u32 reg;
+	int reg;
 	struct gsw_mt753x *gsw = container_of(dev, struct gsw_mt753x, swdev);
 
 	if (val->port_vlan >= MT753X_NUM_PHYS)
@@ -746,6 +871,8 @@ static int mt753x_get_port_power(struct switch_dev *dev,
 	mutex_lock(&gsw->reg_mutex);
 	reg = gsw->mii_read(gsw, val->port_vlan, MII_BMCR);
 	mutex_unlock(&gsw->reg_mutex);
+	if (reg < 0)
+		return reg;
 	val->value.i = (reg & BMCR_PDOWN) ? 0 : 1;
 
 	return 0;
@@ -755,34 +882,36 @@ static int mt753x_set_port_power(struct switch_dev *dev,
                                  const struct switch_attr *attr,
                                  struct switch_val *val)
 {
-	u32 reg;
+	int reg, ret;
 	struct gsw_mt753x *gsw = container_of(dev, struct gsw_mt753x, swdev);
 
 	if (val->port_vlan >= MT753X_NUM_PHYS)
 		return -EINVAL;
 
 	mutex_lock(&gsw->reg_mutex);
-
-	if (val->value.i == 0) {
-		reg = gsw->mii_read(gsw, val->port_vlan, MII_BMCR);
-		reg |= BMCR_PDOWN;
-		gsw->mii_write(gsw, val->port_vlan, MII_BMCR, reg);
-	} else {
-		reg = gsw->mii_read(gsw, val->port_vlan, MII_BMCR);
-		reg &= ~BMCR_PDOWN;
-		gsw->mii_write(gsw, val->port_vlan, MII_BMCR, reg);
+	reg = gsw->mii_read(gsw, val->port_vlan, MII_BMCR);
+	if (reg < 0) {
+		mutex_unlock(&gsw->reg_mutex);
+		return reg;
 	}
 
+	if (val->value.i == 0) {
+		reg |= BMCR_PDOWN;
+	} else {
+		reg &= ~BMCR_PDOWN;
+	}
+
+	ret = gsw->mii_write(gsw, val->port_vlan, MII_BMCR, reg);
 	mutex_unlock(&gsw->reg_mutex);
 
-	return 0;
+	return ret;
 }
 
 static int mt753x_get_ports_link_map(struct switch_dev *dev,
                                      const struct switch_attr *attr,
                                      struct switch_val *val)
 {
-	int port;
+	int port, ret;
 	int map = 0;
 	u32 pmsr;
 	struct gsw_mt753x *gsw = container_of(dev, struct gsw_mt753x, swdev);
@@ -790,13 +919,18 @@ static int mt753x_get_ports_link_map(struct switch_dev *dev,
 	mutex_lock(&gsw->reg_mutex);
 
 	for (port = 0; port < MT753X_NUM_PORTS; port++) {
-		pmsr = mt753x_reg_read(gsw, PMSR(port));
+		ret = mt753x_reg_read_checked(gsw, PMSR(port), &pmsr);
+		if (ret < 0)
+			goto out;
 		if ((pmsr & MAC_LNK_STS)) {
 			map |= (1 << port);
 		}
 	}
 
+out:
 	mutex_unlock(&gsw->reg_mutex);
+	if (ret < 0)
+		return ret;
 
 	val->value.i = map;
 
@@ -934,9 +1068,11 @@ int mt753x_swconfig_init(struct gsw_mt753x *gsw)
 		return ret;
 	}
 
-	mt753x_apply_config(swdev);
+	ret = mt753x_apply_config(swdev);
+	if (ret)
+		unregister_switch(swdev);
 
-	return 0;
+	return ret;
 }
 
 void mt753x_swconfig_destroy(struct gsw_mt753x *gsw)

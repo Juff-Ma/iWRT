@@ -14,7 +14,7 @@ BD_CFGID=xwrt_5g-cpe1801k
 
 PKG_NAME:=lte-modem-$(BD_NAME)
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 PKG_MAINTAINER:=X-WRT <dev@x-wrt.com>
 PKG_LICENSE:=GPL-2.0
@@ -25,7 +25,7 @@ define Package/lte-modem-$(BD_NAME)/Default
   SECTION:=Applications
   CATEGORY:=Independent
   TITLE:=lte-modem for $(BD_CFGID) board
-  DEPENDS:=@(TARGET_ramips_mt7621_DEVICE_$(BD_CFGID)||TARGET_DEVICE_ramips_mt7621_DEVICE_$(BD_CFGID))
+  DEPENDS:=@(TARGET_ramips_mt7621_DEVICE_$(BD_CFGID)||TARGET_DEVICE_ramips_mt7621_DEVICE_$(BD_CFGID)) +comgt-ncm
 endef
 
 define Package/lte-modem-$(BD_NAME)

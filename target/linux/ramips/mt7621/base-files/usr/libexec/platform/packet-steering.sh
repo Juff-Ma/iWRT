@@ -1,8 +1,22 @@
 #!/bin/sh
+
+if [ "$1" = "0" ]; then
+	for file in /sys/class/net/*/queues/rx-*/rps_cpus \
+		/sys/class/net/*/queues/tx-*/xps_cpus; do
+		[ -e "$file" ] && echo 0 > "$file"
+	done
+	exit 0
+fi
+
 NPROCS="$(grep -c "^processor.*:" /proc/cpuinfo)"
 [ "$NPROCS" -gt 1 ] || exit
 
 PROC_MASK="$(( (1 << $NPROCS) - 1 ))"
+
+ETH_MASK="$((PROC_MASK & 4))"
+[ "$ETH_MASK" -ne 0 ] || ETH_MASK="$PROC_MASK"
+MODEM_MASK="$((PROC_MASK & 8))"
+[ "$MODEM_MASK" -ne 0 ] || MODEM_MASK="$PROC_MASK"
 
 find_irq_cpu() {
 	local dev="$1"
@@ -60,10 +74,10 @@ done
 
 #set irq smp_affinity for ethernet and usb1
 irq=$(echo $(cat /proc/interrupts | grep ethernet | cut -d: -f1))
-echo 4 >/proc/irq/${irq}/smp_affinity
+echo "$ETH_MASK" >/proc/irq/${irq}/smp_affinity
 irq=$(echo $(cat /proc/interrupts | grep usb1 | cut -d: -f1))
 echo 2 >/proc/irq/${irq}/smp_affinity
 
-test -e /sys/class/net/usb0/queues/rx-0/rps_cpus && echo 8 > /sys/class/net/usb0/queues/rx-0/rps_cpus
-test -e /sys/class/net/wwan0/queues/rx-0/rps_cpus && echo 8 > /sys/class/net/wwan0/queues/rx-0/rps_cpus
-test -e /sys/class/net/wwan0_1/queues/rx-0/rps_cpus && echo 8 > /sys/class/net/wwan0_1/queues/rx-0/rps_cpus
+test -e /sys/class/net/usb0/queues/rx-0/rps_cpus && echo "$MODEM_MASK" > /sys/class/net/usb0/queues/rx-0/rps_cpus
+test -e /sys/class/net/wwan0/queues/rx-0/rps_cpus && echo "$MODEM_MASK" > /sys/class/net/wwan0/queues/rx-0/rps_cpus
+test -e /sys/class/net/wwan0_1/queues/rx-0/rps_cpus && echo "$MODEM_MASK" > /sys/class/net/wwan0_1/queues/rx-0/rps_cpus

@@ -23,17 +23,15 @@ struct mt753x_nl_cmd_item {
 
 static int mt753x_nl_response(struct sk_buff *skb, struct genl_info *info);
 
-/*
 static const struct nla_policy mt753x_nl_cmd_policy[] = {
 	[MT753X_ATTR_TYPE_MESG] = { .type = NLA_STRING },
 	[MT753X_ATTR_TYPE_PHY] = { .type = NLA_S32 },
 	[MT753X_ATTR_TYPE_REG] = { .type = NLA_S32 },
-	[MT753X_ATTR_TYPE_VAL] = { .type = NLA_S32 },
-	[MT753X_ATTR_TYPE_DEV_NAME] = { .type = NLA_S32 },
+	[MT753X_ATTR_TYPE_VAL] = { .type = NLA_U32 },
+	[MT753X_ATTR_TYPE_DEV_NAME] = { .type = NLA_STRING },
 	[MT753X_ATTR_TYPE_DEV_ID] = { .type = NLA_S32 },
 	[MT753X_ATTR_TYPE_DEVAD] = { .type = NLA_S32 },
 };
-*/
 
 static const struct genl_ops mt753x_nl_ops[] = {
 	{
@@ -58,6 +56,7 @@ static struct genl_family mt753x_nl_family = {
 	.name =		MT753X_GENL_NAME,
 	.version =	MT753X_GENL_VERSION,
 	.maxattr =	MT753X_NR_ATTR_TYPE,
+	.policy =	mt753x_nl_cmd_policy,
 	.ops =		mt753x_nl_ops,
 	.n_ops =	ARRAY_SIZE(mt753x_nl_ops),
 };
@@ -204,7 +203,7 @@ static int mt753x_nl_reply_read(struct genl_info *info, struct gsw_mt753x *gsw)
 	struct sk_buff *rep_skb = NULL;
 	s32 phy, devad, reg;
 	int value;
-	int ret = 0;
+	int ret = -EINVAL;
 
 	phy = mt753x_nl_get_s32(info, MT753X_ATTR_TYPE_PHY, -1);
 	devad = mt753x_nl_get_s32(info, MT753X_ATTR_TYPE_DEVAD, -1);
@@ -222,8 +221,17 @@ static int mt753x_nl_reply_read(struct genl_info *info, struct gsw_mt753x *gsw)
 			value = gsw->mii_read(gsw, phy, reg);
 		else
 			value = gsw->mmd_read(gsw, phy, devad, reg);
+		if (value < 0) {
+			ret = value;
+			goto err;
+		}
 	} else {
-		value = mt753x_reg_read(gsw, reg);
+		u32 reg_value;
+
+		ret = mt753x_reg_read_checked(gsw, reg, &reg_value);
+		if (ret < 0)
+			goto err;
+		value = reg_value;
 	}
 
 	ret = nla_put_s32(rep_skb, MT753X_ATTR_TYPE_REG, reg);
@@ -248,7 +256,7 @@ static int mt753x_nl_reply_write(struct genl_info *info, struct gsw_mt753x *gsw)
 	struct sk_buff *rep_skb = NULL;
 	s32 phy, devad, reg;
 	u32 value;
-	int ret = 0;
+	int ret = -EINVAL;
 
 	phy = mt753x_nl_get_s32(info, MT753X_ATTR_TYPE_PHY, -1);
 	devad = mt753x_nl_get_s32(info, MT753X_ATTR_TYPE_DEVAD, -1);
@@ -266,12 +274,14 @@ static int mt753x_nl_reply_write(struct genl_info *info, struct gsw_mt753x *gsw)
 
 	if (phy >= 0) {
 		if (devad < 0)
-			gsw->mii_write(gsw, phy, reg, value);
+			ret = gsw->mii_write(gsw, phy, reg, value);
 		else
-			gsw->mmd_write(gsw, phy, devad, reg, value);
+			ret = gsw->mmd_write(gsw, phy, devad, reg, value);
 	} else {
-		mt753x_reg_write(gsw, reg, value);
+		ret = mt753x_reg_write(gsw, reg, value);
 	}
+	if (ret < 0)
+		goto err;
 
 	ret = nla_put_s32(rep_skb, MT753X_ATTR_TYPE_REG, reg);
 	if (ret < 0)

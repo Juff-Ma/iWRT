@@ -2,13 +2,17 @@
 #include "utils/common.h"
 #include "utils/ucode.h"
 #include "utils/base64.h"
+#include "utils/eloop.h"
 #include "drivers/driver.h"
 #include "ap/hostapd.h"
+#include "common/sae.h"
+#include "rsn_supp/wpa.h"
 #include "wpa_supplicant_i.h"
 #include "wps_supplicant.h"
 #include "ctrl_iface.h"
 #include "config.h"
 #include "bss.h"
+#include "scan.h"
 #include "ucode.h"
 #include "offchannel.h"
 #ifdef CONFIG_DPP
@@ -21,6 +25,8 @@ static struct wpa_global *wpa_global;
 static uc_resource_type_t *global_type, *iface_type;
 static uc_value_t *global, *iface_registry;
 static uc_vm_t *vm;
+
+static void uc_wpas_iface_status_bss(uc_value_t *ret, struct wpa_bss *bss);
 
 static uc_value_t *
 wpas_ucode_iface_get_uval(struct wpa_supplicant *wpa_s)
@@ -60,6 +66,7 @@ wpas_ucode_bss_get_uval(struct wpa_bss *bss)
 	ucv_object_add(val, "snr", ucv_int64_new(bss->snr));
 	ucv_object_add(val, "signal", ucv_int64_new(bss->level));
 	ucv_object_add(val, "noise", ucv_int64_new(bss->noise));
+	uc_wpas_iface_status_bss(val, bss);
 
 	return val;
 }
@@ -113,6 +120,83 @@ bool wpas_ucode_bss_allowed(struct wpa_supplicant *wpa_s, struct wpa_bss *bss)
 	return ret;
 }
 
+static void wpas_ucode_channel_retry(void *eloop_ctx, void *timeout_ctx)
+{
+	struct wpa_radio_work *work = timeout_ctx;
+
+	work->cb(work, 0);
+}
+
+void wpas_ucode_cancel_channel(struct wpa_radio_work *work)
+{
+	eloop_cancel_timeout(wpas_ucode_channel_retry, work->wpa_s, work);
+}
+
+/* Keep the radio work alive until the AP has completed its channel switch. */
+bool wpas_ucode_prepare_channel(struct wpa_radio_work *work)
+{
+	struct wpa_supplicant *wpa_s = work->wpa_s;
+	struct wpa_connect_work *cwork = work->ctx;
+	uc_value_t *val;
+	bool pending;
+
+	if (!cwork->bss || cwork->ssid->mode != WPAS_MODE_INFRA ||
+	    wpa_ucode_call_prepare("prepare"))
+		return false;
+
+	val = wpas_ucode_bss_get_uval(cwork->bss);
+#ifdef CONFIG_IEEE80211BE
+	if ((wpa_s->drv_flags2 & WPA_DRIVER_FLAGS2_MLO) && cwork->bss->valid_links) {
+		uc_value_t *links = ucv_array_new(vm);
+		u16 usable = wpa_bss_get_usable_links(wpa_s, cwork->bss, cwork->ssid, NULL);
+		unsigned int i;
+
+		for (i = 0; i < MAX_NUM_MLD_LINKS; i++) {
+			struct mld_link *link = &cwork->bss->mld_links[i];
+			struct wpa_bss *bss;
+			uc_value_t *info;
+
+			if (!(usable & BIT(i)) ||
+			    link->disabled || !link->freq)
+				continue;
+			bss = wpa_bss_get_bssid(wpa_s, link->bssid);
+			info = bss ? wpas_ucode_bss_get_uval(bss) : ucv_object_new(vm);
+			ucv_object_add(info, "freq", ucv_int64_new(link->freq));
+			ucv_array_push(links, info);
+		}
+		ucv_object_add(val, "links", links);
+	}
+#endif /* CONFIG_IEEE80211BE */
+	uc_value_push(ucv_string_new(wpa_s->ifname));
+	uc_value_push(val);
+	val = wpa_ucode_call(2);
+	pending = ucv_type(val) == UC_BOOLEAN && !ucv_boolean_get(val);
+	ucv_put(val);
+	if (!pending)
+		return false;
+
+	/* The old STA link can pin a shared channel context during a roam. */
+	if (wpa_s->wpa_state >= WPA_ASSOCIATED && wpa_s->assoc_freq &&
+	    wpa_s->assoc_freq != cwork->bss->freq) {
+		wpa_supplicant_deauthenticate(wpa_s, WLAN_REASON_DEAUTH_LEAVING);
+		wpa_supplicant_req_scan(wpa_s, 0, 100000);
+		return true;
+	}
+
+	if (++cwork->apsta_retries > 50) {
+		wpa_msg(wpa_s, MSG_INFO, "AP/STA: AP channel switch timed out");
+		wpas_connect_work_done(wpa_s);
+		wpa_supplicant_req_scan(wpa_s, 1, 0);
+		return true;
+	}
+
+	if (eloop_register_timeout(0, 100000, wpas_ucode_channel_retry, wpa_s, work) < 0) {
+		wpas_connect_work_done(wpa_s);
+		wpa_supplicant_req_scan(wpa_s, 1, 0);
+	}
+	return true;
+}
+
 void wpas_ucode_update_state(struct wpa_supplicant *wpa_s)
 {
 	const char *state;
@@ -137,7 +221,8 @@ void wpas_ucode_event(struct wpa_supplicant *wpa_s, int event, union wpa_event_d
 	const char *state;
 	uc_value_t *val;
 
-	if (event != EVENT_CH_SWITCH_STARTED)
+	if (event != EVENT_CH_SWITCH_STARTED &&
+	    event != EVENT_LINK_CH_SWITCH_STARTED)
 		return;
 
 	val = wpa_ucode_registry_get(iface_registry, wpa_s->ucode.idx);
@@ -153,13 +238,13 @@ void wpas_ucode_event(struct wpa_supplicant *wpa_s, int event, union wpa_event_d
 	val = ucv_object_new(vm);
 	uc_value_push(ucv_get(val));
 
-	if (event == EVENT_CH_SWITCH_STARTED) {
-		ucv_object_add(val, "csa_count", ucv_int64_new(data->ch_switch.count));
-		ucv_object_add(val, "frequency", ucv_int64_new(data->ch_switch.freq));
-		ucv_object_add(val, "sec_chan_offset", ucv_int64_new(data->ch_switch.ch_offset));
-		ucv_object_add(val, "center_freq1", ucv_int64_new(data->ch_switch.cf1));
-		ucv_object_add(val, "center_freq2", ucv_int64_new(data->ch_switch.cf2));
-	}
+	ucv_object_add(val, "csa_count", ucv_int64_new(data->ch_switch.count));
+	ucv_object_add(val, "frequency", ucv_int64_new(data->ch_switch.freq));
+	ucv_object_add(val, "sec_chan_offset", ucv_int64_new(data->ch_switch.ch_offset));
+	ucv_object_add(val, "center_freq1", ucv_int64_new(data->ch_switch.cf1));
+	ucv_object_add(val, "center_freq2", ucv_int64_new(data->ch_switch.cf2));
+	if (event == EVENT_LINK_CH_SWITCH_STARTED)
+		ucv_object_add(val, "link_id", ucv_int64_new(data->ch_switch.link_id));
 
 	ucv_put(wpa_ucode_call(4));
 }
@@ -483,6 +568,52 @@ uc_wpas_iface_dpp_send_gas_req(uc_vm_t *vm, size_t nargs)
 
 	return ucv_boolean_new(ret == 0);
 }
+
+/*
+ * hostapd defers a DPP config response above gas_frag_limit to a GAS comeback
+ * exchange. dpp_send_action() cannot request it, as it rebuilds the frame as a
+ * DPP message instead of a plain public action frame.
+ */
+static uc_value_t *
+uc_wpas_iface_dpp_send_gas_comeback_req(uc_vm_t *vm, size_t nargs)
+{
+	struct wpa_supplicant *wpa_s = uc_fn_thisval("wpas.iface");
+	uc_value_t *dst_arg = uc_fn_arg(0);
+	uc_value_t *freq_arg = uc_fn_arg(1);
+	uc_value_t *token_arg = uc_fn_arg(2);
+	const char *dst_str;
+	u8 dst[ETH_ALEN];
+	unsigned int freq;
+	u8 dialog_token;
+	struct wpabuf *buf;
+	int ret;
+
+	if (!wpa_s || ucv_type(dst_arg) != UC_STRING)
+		return NULL;
+
+	dst_str = ucv_string_get(dst_arg);
+	if (hwaddr_aton(dst_str, dst))
+		return NULL;
+
+	freq = ucv_int64_get(freq_arg);
+	if (!freq)
+		freq = wpa_s->assoc_freq;
+
+	dialog_token = ucv_int64_get(token_arg);
+	if (!dialog_token)
+		return NULL;
+
+	buf = gas_build_comeback_req(dialog_token);
+	if (!buf)
+		return NULL;
+
+	ret = offchannel_send_action(wpa_s, freq, dst, wpa_s->own_addr,
+				     broadcast_ether_addr, wpabuf_head(buf),
+				     wpabuf_len(buf), 500, NULL, 0);
+	wpabuf_free(buf);
+
+	return ucv_boolean_new(ret == 0);
+}
 #endif /* CONFIG_DPP */
 
 static const char *obj_stringval(uc_value_t *obj, const char *name)
@@ -611,6 +742,8 @@ uc_wpas_iface_status(uc_vm_t *vm, size_t nargs)
 {
 	struct wpa_supplicant *wpa_s = uc_fn_thisval("wpas.iface");
 	struct wpa_bss *bss;
+	struct wpa_ssid *ssid;
+	bool enabled = false;
 	uc_value_t *ret;
 
 	if (!wpa_s)
@@ -619,6 +752,11 @@ uc_wpas_iface_status(uc_vm_t *vm, size_t nargs)
 	ret = ucv_object_new(vm);
 
 	ucv_object_add(ret, "state", ucv_string_new(wpa_supplicant_state_txt(wpa_s->wpa_state)));
+	for (ssid = wpa_s->conf->ssid; ssid; ssid = ssid->next)
+		if (!ssid->disabled)
+			enabled = true;
+	ucv_object_add(ret, "disabled", ucv_boolean_new(wpa_s->disconnected ||
+		wpa_s->wpa_state == WPA_INTERFACE_DISABLED || !enabled));
 
 	bss = wpa_s->current_bss;
 	if (bss)
@@ -738,6 +876,114 @@ uc_wpas_iface_config(uc_vm_t *vm, size_t nargs)
 	return ret;
 }
 
+#ifdef CONFIG_SAE
+static bool
+uc_wpas_sae_password_equal(struct wpa_ssid *a, struct wpa_ssid *b)
+{
+	const char *pw_a = a->sae_password ? a->sae_password : a->passphrase;
+	const char *pw_b = b->sae_password ? b->sae_password : b->passphrase;
+
+	return pw_a && pw_b && !os_strcmp(pw_a, pw_b);
+}
+#endif /* CONFIG_SAE */
+
+static const char *
+uc_wpas_network_mismatch(struct wpa_supplicant *wpa_s, struct wpa_ssid *ssid)
+{
+	struct wpa_ssid *cur = wpa_s->current_ssid;
+	int pmf = wpas_get_ssid_pmf(wpa_s, ssid);
+	int pmf_used = wpa_sm_pmf_enabled(wpa_s->wpa);
+
+	if (cur->ssid_len != ssid->ssid_len ||
+	    os_memcmp(cur->ssid, ssid->ssid, ssid->ssid_len) != 0)
+		return "SSID";
+	if (!(ssid->key_mgmt & wpa_s->key_mgmt))
+		return "AKM";
+	if (!(ssid->proto & wpa_s->wpa_proto))
+		return "protocol";
+	if (!(ssid->pairwise_cipher & wpa_s->pairwise_cipher) ||
+	    !(ssid->group_cipher & wpa_s->group_cipher))
+		return "cipher";
+	if ((pmf == MGMT_FRAME_PROTECTION_REQUIRED && !pmf_used) ||
+	    (pmf == NO_MGMT_FRAME_PROTECTION && pmf_used))
+		return "PMF";
+	if (cur->ext_psk || ssid->ext_psk)
+		return "external password";
+	if (wpa_key_mgmt_wpa_psk_no_sae(wpa_s->key_mgmt) &&
+	    (!cur->psk_set || !ssid->psk_set ||
+	     os_memcmp(cur->psk, ssid->psk, PMK_LEN) != 0))
+		return "PSK";
+#ifdef CONFIG_SAE
+	if (wpa_key_mgmt_sae(wpa_s->key_mgmt) &&
+	    (!uc_wpas_sae_password_equal(cur, ssid) ||
+	     wpas_get_ssid_sae_pwe(wpa_s, cur) !=
+	     wpas_get_ssid_sae_pwe(wpa_s, ssid)))
+		return "SAE password or PWE";
+#endif /* CONFIG_SAE */
+
+	return NULL;
+}
+
+/*
+ * The PMKSA cache stays: flushing it deauthenticates a station that holds
+ * an SAE PMKSA.
+ */
+static void
+uc_wpas_network_move(struct wpa_ssid *cur, struct wpa_ssid *ssid)
+{
+	str_clear_free(cur->passphrase);
+	cur->passphrase = ssid->passphrase;
+	ssid->passphrase = NULL;
+	str_clear_free(cur->sae_password);
+	cur->sae_password = ssid->sae_password;
+	ssid->sae_password = NULL;
+	os_memcpy(cur->psk, ssid->psk, PMK_LEN);
+	cur->psk_set = ssid->psk_set;
+	cur->key_mgmt = ssid->key_mgmt;
+	cur->ieee80211w = ssid->ieee80211w;
+	cur->sae_pwe = ssid->sae_pwe;
+	cur->proto = ssid->proto;
+	cur->pairwise_cipher = ssid->pairwise_cipher;
+	cur->group_cipher = ssid->group_cipher;
+#ifdef CONFIG_SAE
+	sae_deinit_pt(cur->pt);
+	cur->pt = NULL;
+#endif /* CONFIG_SAE */
+}
+
+static uc_value_t *
+uc_wpas_iface_network_update(uc_vm_t *vm, size_t nargs)
+{
+	struct wpa_supplicant *wpa_s = uc_fn_thisval("wpas.iface");
+	struct wpa_config *conf;
+	const char *mismatch = "configuration";
+
+	if (!wpa_s)
+		return NULL;
+
+	if (!wpa_s->current_ssid || wpa_s->current_ssid != wpa_s->conf->ssid ||
+	    wpa_s->conf->ssid->next || wpa_s->wpa_state != WPA_COMPLETED ||
+	    !wpa_key_mgmt_wpa_psk(wpa_s->key_mgmt) || !wpa_s->confname)
+		return ucv_boolean_new(false);
+
+	conf = wpa_config_read(wpa_s->confname, NULL, false, false);
+	if (!conf)
+		return ucv_boolean_new(false);
+
+	if (conf->ssid && !conf->ssid->next)
+		mismatch = uc_wpas_network_mismatch(wpa_s, conf->ssid);
+
+	if (mismatch)
+		wpa_printf(MSG_INFO, "%s: new network does not fit the association: %s",
+			   wpa_s->ifname, mismatch);
+	else
+		uc_wpas_network_move(wpa_s->current_ssid, conf->ssid);
+
+	wpa_config_free(conf);
+
+	return ucv_boolean_new(!mismatch);
+}
+
 int wpas_ucode_init(struct wpa_global *gl)
 {
 	static const uc_function_list_t global_fns[] = {
@@ -751,10 +997,12 @@ int wpas_ucode_init(struct wpa_global *gl)
 		{ "status", uc_wpas_iface_status },
 		{ "ctrl", uc_wpas_iface_ctrl },
 		{ "config", uc_wpas_iface_config },
+		{ "network_update", uc_wpas_iface_network_update },
 		{ "wps_set_m7", uc_wpas_iface_wps_set_m7 },
 #ifdef CONFIG_DPP
 		{ "dpp_send_action", uc_wpas_iface_dpp_send_action },
 		{ "dpp_send_gas_req", uc_wpas_iface_dpp_send_gas_req },
+		{ "dpp_send_gas_comeback_req", uc_wpas_iface_dpp_send_gas_comeback_req },
 #endif /* CONFIG_DPP */
 	};
 	uc_value_t *data, *proto;

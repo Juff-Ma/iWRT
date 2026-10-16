@@ -10,37 +10,51 @@
 #include "mt753x.h"
 #include "mt753x_regs.h"
 
-void mt753x_irq_enable(struct gsw_mt753x *gsw)
+int mt753x_irq_enable(struct gsw_mt753x *gsw)
 {
 	u32 val;
-	int i;
+	int i, ret;
 
 	/* Record initial PHY link status */
 	for (i = 0; i < MT753X_NUM_PHYS; i++) {
-		val = gsw->mii_read(gsw, i, MII_BMSR);
+		ret = gsw->mii_read(gsw, i, MII_BMSR);
+		if (ret < 0)
+			return ret;
+		val = ret;
 		if (val & BMSR_LSTATUS)
 			gsw->phy_link_sts |= BIT(i);
 	}
 
 	val = BIT(MT753X_NUM_PHYS) - 1;
 
-	mt753x_reg_write(gsw, SYS_INT_EN, val);
+	ret = mt753x_reg_write(gsw, SYS_INT_EN, val);
+	if (ret < 0)
+		return ret;
 
 	if (gsw->model != MT7531) {
-		val = mt753x_reg_read(gsw, MT7530_TOP_SIG_CTRL);
+		ret = mt753x_reg_read_checked(gsw, MT7530_TOP_SIG_CTRL, &val);
+		if (ret < 0)
+			return ret;
 		val |= TOP_SIG_CTRL_NORMAL;
-		mt753x_reg_write(gsw, MT7530_TOP_SIG_CTRL, val);
+		ret = mt753x_reg_write(gsw, MT7530_TOP_SIG_CTRL, val);
+		if (ret < 0)
+			return ret;
 	}
+
+	return 0;
 }
 
 static void display_port_link_status(struct gsw_mt753x *gsw, u32 port)
 {
 	u32 pmsr, speed_bits;
 	const char *speed;
+	int ret;
 
 	mutex_lock(&gsw->reg_mutex);
-	pmsr = mt753x_reg_read(gsw, PMSR(port));
+	ret = mt753x_reg_read_checked(gsw, PMSR(port), &pmsr);
 	mutex_unlock(&gsw->reg_mutex);
+	if (ret < 0)
+		return;
 
 	speed_bits = (pmsr & MAC_SPD_STS_M) >> MAC_SPD_STS_S;
 
@@ -71,14 +85,17 @@ void mt753x_irq_worker(struct work_struct *work)
 {
 	struct gsw_mt753x *gsw;
 	u32 sts, physts, laststs;
-	int i;
+	int i, ret;
 
 	gsw = container_of(work, struct gsw_mt753x, irq_worker);
 
 	mutex_lock(&gsw->reg_mutex);
-	sts = mt753x_reg_read(gsw, SYS_INT_STS);
-	mt753x_reg_write(gsw, SYS_INT_STS, sts);
+	ret = mt753x_reg_read_checked(gsw, SYS_INT_STS, &sts);
+	if (!ret)
+		ret = mt753x_reg_write(gsw, SYS_INT_STS, sts);
 	mutex_unlock(&gsw->reg_mutex);
+	if (ret < 0)
+		goto out;
 
 	/* Check for changed PHY link status */
 	for (i = 0; i < MT753X_NUM_PHYS; i++) {
@@ -87,8 +104,11 @@ void mt753x_irq_worker(struct work_struct *work)
 
 		laststs = gsw->phy_link_sts & BIT(i);
 		mutex_lock(&gsw->reg_mutex);
-		physts = !!(gsw->mii_read(gsw, i, MII_BMSR) & BMSR_LSTATUS);
+		ret = gsw->mii_read(gsw, i, MII_BMSR);
 		mutex_unlock(&gsw->reg_mutex);
+		if (ret < 0)
+			continue;
+		physts = !!(ret & BMSR_LSTATUS);
 		physts <<= i;
 
 		if (physts ^ laststs) {
@@ -97,5 +117,6 @@ void mt753x_irq_worker(struct work_struct *work)
 		}
 	}
 
+out:
 	enable_irq(gsw->irq);
 }

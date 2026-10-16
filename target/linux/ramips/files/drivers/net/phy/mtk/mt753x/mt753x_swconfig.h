@@ -16,9 +16,7 @@ void mt753x_swconfig_destroy(struct gsw_mt753x *gsw);
 #else
 static inline int mt753x_swconfig_init(struct gsw_mt753x *gsw)
 {
-	mt753x_apply_vlan_config(gsw);
-
-	return 0;
+	return mt753x_apply_vlan_config(gsw);
 }
 
 static inline void mt753x_swconfig_destroy(struct gsw_mt753x *gsw)

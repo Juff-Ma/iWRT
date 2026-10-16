@@ -116,6 +116,7 @@ ioctl_wrapper_ctx_t *pioctlctl;
 int pedev0_num = 0;
 ethsw_api_dev_t *pedev0[GSW_DEV_MAX];
 struct intel_gsw *g_gsw[GSW_DEV_MAX];
+static DEFINE_MUTEX(gsw_device_lock);
 extern gsw_lowlevel_fkts_t flow_fkt_tbl;
 
 #if defined(SUPPORT_AS_LOADABLE_MODULE) && SUPPORT_AS_LOADABLE_MODULE
@@ -197,11 +198,12 @@ static GSW_return_t uart_reg_wr(u16 regaddr, u16 data)
 static GSW_return_t WriteMdio(u8 mdio_id, u16 phyaddr, u16 regaddr, u16 data)
 {
 	struct intel_gsw *gsw = g_gsw[mdio_id];
+	int ret;
 
 	mutex_lock(&gsw->bus->mdio_lock);
-	gsw->bus->write(gsw->bus, phyaddr, regaddr, data);
+	ret = gsw->bus->write(gsw->bus, phyaddr, regaddr, data);
 	mutex_unlock(&gsw->bus->mdio_lock);
-	return 0;
+	return ret;
 }
 
 /* Customer can modify MDIO routines depends on SOC supports
@@ -214,6 +216,8 @@ static GSW_return_t ReadMdio(u8 mdio_id, u16 phyaddr, u16 regaddr, u16 *data)
 	mutex_lock(&gsw->bus->mdio_lock);
 	phy_value = gsw->bus->read(gsw->bus, phyaddr, regaddr);
 	mutex_unlock(&gsw->bus->mdio_lock);
+	if (phy_value < 0)
+		return phy_value;
 	*data = (u16)phy_value;
 	return 0;
 }
@@ -403,7 +407,30 @@ module_init(gsw_swapi_init);
 module_exit(gsw_swapi_exit);
 #endif
 
-static void init_gsw(struct intel_gsw *gsw)
+static int gsw150_read_id(struct intel_gsw *gsw, ur *addr, ur *chip_ver,
+			  ur *chip_id)
+{
+	int ret;
+
+	ret = gsw_reg_rd(&gsw->pd, PNUM_ID_VER_OFFSET, 0, 16, chip_ver);
+	if (ret)
+		return ret;
+	ret = gsw_reg_rd(&gsw->pd, SMDIO_CFG_ADDR_OFFSET,
+	                 SMDIO_CFG_ADDR_SHIFT, SMDIO_CFG_ADDR_SIZE, addr);
+	if (ret)
+		return ret;
+	return gsw_reg_rd(&gsw->pd, MANU_ID_MANID_OFFSET,
+	                  MANU_ID_MANID_SHIFT, MANU_ID_MANID_SIZE, chip_id);
+}
+
+static bool gsw150_id_matches(struct intel_gsw *gsw, ur addr, ur chip_ver,
+			      ur chip_id)
+{
+	return chip_id == 0x389 && chip_ver == 0x2003 &&
+	       addr == gsw->pd.mdio_addr;
+}
+
+static int init_gsw(struct intel_gsw *gsw)
 {
 	int res;
 
@@ -411,32 +438,37 @@ static void init_gsw(struct intel_gsw *gsw)
 	gsw_num = 1;
 	res = ethsw_swapi_register();
 	GSW_PRINT("SWITCH API, Init Done. result=%d\n", res);
+	if (res)
+		return res;
 
 	gsw->pd.mdio_addr = gsw->smi_addr;
 
 #if 1
 	do {
 		int i;
-		int addr = -1;
-		int chip_ver = -1;
-		int chip_id = -1;
+		ur addr, chip_ver, chip_id;
 
-		gsw_reg_rd(&gsw->pd, PNUM_ID_VER_OFFSET, 0, 16, &chip_ver);
-		gsw_reg_rd(&gsw->pd, SMDIO_CFG_ADDR_OFFSET, SMDIO_CFG_ADDR_SHIFT, SMDIO_CFG_ADDR_SIZE, &addr);
-		gsw_reg_rd(&gsw->pd, MANU_ID_MANID_OFFSET, MANU_ID_MANID_SHIFT, MANU_ID_MANID_SIZE, &chip_id);
+		res = gsw150_read_id(gsw, &addr, &chip_ver, &chip_id);
+		if (res)
+			goto unregister_api;
 
-		if (!(chip_id == 0x389 && chip_ver == 0x2003 && addr == gsw->pd.mdio_addr)) {
+		if (!gsw150_id_matches(gsw, addr, chip_ver, chip_id)) {
 			printk("init_gsw: Wrong smdio addr addr=%u (expected %u) chip_id=0x%x chip_ver=0x%x\n", addr, gsw->pd.mdio_addr, chip_id, chip_ver);
 			printk("init_gsw: Try smdio addr re-program to %u\n", gsw->smi_addr);
 			for (i = 0; i <= 31; i++) {
 				gsw->pd.mdio_addr = i;
-				gsw_reg_wr(&gsw->pd, SMDIO_CFG_ADDR_OFFSET, SMDIO_CFG_ADDR_SHIFT, SMDIO_CFG_ADDR_SIZE, gsw->smi_addr);
+				res = gsw_reg_wr(&gsw->pd, SMDIO_CFG_ADDR_OFFSET,
+				                 SMDIO_CFG_ADDR_SHIFT,
+				                 SMDIO_CFG_ADDR_SIZE, gsw->smi_addr);
 
 				gsw->pd.mdio_addr = gsw->smi_addr;
-				gsw_reg_rd(&gsw->pd, PNUM_ID_VER_OFFSET, 0, 16, &chip_ver);
-				gsw_reg_rd(&gsw->pd, SMDIO_CFG_ADDR_OFFSET, SMDIO_CFG_ADDR_SHIFT, SMDIO_CFG_ADDR_SIZE, &addr);
-				gsw_reg_rd(&gsw->pd, MANU_ID_MANID_OFFSET, MANU_ID_MANID_SHIFT, MANU_ID_MANID_SIZE, &chip_id);
-				if (chip_id == 0x389 && chip_ver == 0x2003 && addr == gsw->pd.mdio_addr) {
+				if (res)
+					goto unregister_api;
+				res = gsw150_read_id(gsw, &addr, &chip_ver,
+				                     &chip_id);
+				if (res)
+					goto unregister_api;
+				if (gsw150_id_matches(gsw, addr, chip_ver, chip_id)) {
 					printk("init_gsw: Try smdio addr re-program to %u via addr %u done!\n", gsw->smi_addr, i);
 					break;
 				}
@@ -445,12 +477,14 @@ static void init_gsw(struct intel_gsw *gsw)
 			//check again
 			gsw->pd.mdio_addr = gsw->smi_addr;
 
-			gsw_reg_rd(&gsw->pd, PNUM_ID_VER_OFFSET, 0, 16, &chip_ver);
-			gsw_reg_rd(&gsw->pd, SMDIO_CFG_ADDR_OFFSET, SMDIO_CFG_ADDR_SHIFT, SMDIO_CFG_ADDR_SIZE, &addr);
-			gsw_reg_rd(&gsw->pd, MANU_ID_MANID_OFFSET, MANU_ID_MANID_SHIFT, MANU_ID_MANID_SIZE, &chip_id);
+			res = gsw150_read_id(gsw, &addr, &chip_ver, &chip_id);
+			if (res)
+				goto unregister_api;
 
-			if (!(chip_id == 0x389 && chip_ver == 0x2003 && addr == gsw->pd.mdio_addr)) {
+			if (!gsw150_id_matches(gsw, addr, chip_ver, chip_id)) {
 				printk("init_gsw: smdio addr re-program failed! addr=%u (expected %u) chip_id=0x%x chip_ver=0x%x\n", addr, gsw->pd.mdio_addr, chip_id, chip_ver);
+				res = -ENODEV;
+				goto unregister_api;
 			} else {
 				printk("init_gsw: smdio addr re-program done! addr=%u (expected %u) chip_id=0x%x chip_ver=0x%x\n", addr, gsw->pd.mdio_addr, chip_id, chip_ver);
 			}
@@ -460,12 +494,28 @@ static void init_gsw(struct intel_gsw *gsw)
 	} while (0);
 #endif
 
-	gsw_reg_wr(&gsw->pd, LED_BRT_CTRL_MAXLEVEL_OFFSET, LED_BRT_CTRL_MINLEVEL_SHIFT, LED_BRT_CTRL_MINLEVEL_SIZE, 15);
-	intel_init(gsw);
+	res = gsw_reg_wr(&gsw->pd, LED_BRT_CTRL_MAXLEVEL_OFFSET,
+	                 LED_BRT_CTRL_MINLEVEL_SHIFT,
+	                 LED_BRT_CTRL_MINLEVEL_SIZE, 15);
+	if (res)
+		goto unregister_api;
+	res = intel_init(gsw);
+	if (res)
+		goto unregister_api;
 
 #ifdef CONFIG_SWCONFIG
-	intel_swconfig_init(gsw);
+	res = intel_swconfig_init(gsw);
+	if (res) {
+		intel_deinit(gsw);
+		goto unregister_api;
+	}
 #endif
+
+	return 0;
+
+unregister_api:
+	ethsw_swapi_unregister();
+	return res;
 }
 
 static void deinit_gsw(struct intel_gsw *gsw)
@@ -491,39 +541,64 @@ static int gsw150_probe(struct platform_device *pdev)
 	struct device_node *mdio;
 	struct mii_bus *mdio_bus;
 	struct intel_gsw *gsw;
-	//const char *pm;
+	int ret;
+
+	/* The platform initialization path supports one switch at index zero. */
+	mutex_lock(&gsw_device_lock);
+	if (pedev0_num) {
+		ret = -EBUSY;
+		goto out;
+	}
+	if (gsw_mdio_id[0] != 0) {
+		dev_err(&pdev->dev, "Only MDIO device index 0 is supported\n");
+		ret = -EINVAL;
+		goto out;
+	}
 
 	mdio = of_parse_phandle(np, "mediatek,mdio", 0);
 
-	if (!mdio)
-		return -EINVAL;
+	if (!mdio) {
+		ret = -EINVAL;
+		goto out;
+	}
 
 	mdio_bus = of_mdio_find_bus(mdio);
+	of_node_put(mdio);
 
-	if (!mdio_bus)
-		return -EPROBE_DEFER;
+	if (!mdio_bus) {
+		ret = -EPROBE_DEFER;
+		goto out;
+	}
 
 	gsw = devm_kzalloc(&pdev->dev, sizeof(struct intel_gsw), GFP_KERNEL);
 
-	if (!gsw)
-		return -ENOMEM;
+	if (!gsw) {
+		ret = -ENOMEM;
+		goto put_bus;
+	}
 
 	gsw->dev = &pdev->dev;
 
 	gsw->bus = mdio_bus;
 
 	gsw->reset_pin = of_get_named_gpio(np, "mediatek,reset-pin", 0);
+	if (gsw->reset_pin < 0 && gsw->reset_pin != -ENOENT) {
+		ret = gsw->reset_pin;
+		goto put_bus;
+	}
 	if (gsw->reset_pin >= 0) {
-		int ret = devm_gpio_request_one(gsw->dev, gsw->reset_pin, GPIOF_OUT_INIT_HIGH, "gsw150-reset");
+		ret = devm_gpio_request_one(gsw->dev, gsw->reset_pin,
+		                            GPIOF_OUT_INIT_HIGH, "gsw150-reset");
 		if (ret) {
 			dev_info(gsw->dev, "Failed to request gpio %d\n",
 			         gsw->reset_pin);
-		} else {
-			gpio_set_value(gsw->reset_pin, 1);
-			msleep(30);
-			gpio_set_value(gsw->reset_pin, 0);
-			msleep(500);
+			goto put_bus;
 		}
+
+		gpio_set_value(gsw->reset_pin, 1);
+		msleep(30);
+		gpio_set_value(gsw->reset_pin, 0);
+		msleep(500);
 	}
 
 	/* Fetch the SMI address dirst */
@@ -534,11 +609,23 @@ static int gsw150_probe(struct platform_device *pdev)
 	pedev0[pedev0_num++] = &gsw->pd;
 	printk("gsw150_probe gsw=%p\n", gsw);
 
-	init_gsw(gsw);
+	ret = init_gsw(gsw);
+	if (ret)
+		goto clear_devices;
 
 	platform_set_drvdata(pdev, gsw);
+	ret = 0;
+	goto out;
 
-	return 0;
+clear_devices:
+	g_gsw[0] = NULL;
+	pedev0[0] = NULL;
+	pedev0_num = 0;
+put_bus:
+	put_device(&mdio_bus->dev);
+out:
+	mutex_unlock(&gsw_device_lock);
+	return ret;
 }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6,12,0)
@@ -548,16 +635,21 @@ static int gsw150_remove(struct platform_device *pdev)
 #endif
 {
 	struct intel_gsw *gsw = platform_get_drvdata(pdev);
+
+	mutex_lock(&gsw_device_lock);
 	if (gsw) {
 		deinit_gsw(gsw);
+		g_gsw[0] = NULL;
+		pedev0[0] = NULL;
+		pedev0_num = 0;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,0,0)
 		if (gsw->reset_pin >= 0)
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,0,0)
-			gpio_free(gsw->reset_pin);
-#else
 			devm_gpio_free(&pdev->dev, gsw->reset_pin);
 #endif
+		put_device(&gsw->bus->dev);
 	}
 	platform_set_drvdata(pdev, NULL);
+	mutex_unlock(&gsw_device_lock);
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6,12,0)
 #else

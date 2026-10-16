@@ -210,133 +210,195 @@ static int mt7530_mii_read(struct gsw_mt753x *gsw, int phy, int reg)
 	return mdiobus_read(gsw->host_bus, phy, reg);
 }
 
-static void mt7530_mii_write(struct gsw_mt753x *gsw, int phy, int reg, u16 val)
+static int mt7530_mii_write(struct gsw_mt753x *gsw, int phy, int reg, u16 val)
 {
 	if (phy < MT753X_NUM_PHYS)
 		phy = (gsw->phy_base + phy) & MT753X_SMI_ADDR_MASK;
 
-	mdiobus_write(gsw->host_bus, phy, reg, val);
+	return mdiobus_write(gsw->host_bus, phy, reg, val);
 }
 
 static int mt7530_mmd_read(struct gsw_mt753x *gsw, int addr, int devad, u16 reg)
 {
-	u16 val;
+	int val;
 
 	if (addr < MT753X_NUM_PHYS)
 		addr = (gsw->phy_base + addr) & MT753X_SMI_ADDR_MASK;
 
 	mutex_lock(&gsw->host_bus->mdio_lock);
 
-	gsw->host_bus->write(gsw->host_bus, addr, MII_MMD_ACC_CTL_REG,
-	                     (MMD_ADDR << MMD_CMD_S) |
-	                     ((devad << MMD_DEVAD_S) & MMD_DEVAD_M));
+	val = gsw->host_bus->write(gsw->host_bus, addr, MII_MMD_ACC_CTL_REG,
+	                           (MMD_ADDR << MMD_CMD_S) |
+	                           ((devad << MMD_DEVAD_S) & MMD_DEVAD_M));
+	if (val < 0)
+		goto out;
 
-	gsw->host_bus->write(gsw->host_bus, addr, MII_MMD_ADDR_DATA_REG, reg);
+	val = gsw->host_bus->write(gsw->host_bus, addr, MII_MMD_ADDR_DATA_REG, reg);
+	if (val < 0)
+		goto out;
 
-	gsw->host_bus->write(gsw->host_bus, addr, MII_MMD_ACC_CTL_REG,
-	                     (MMD_DATA << MMD_CMD_S) |
-	                     ((devad << MMD_DEVAD_S) & MMD_DEVAD_M));
+	val = gsw->host_bus->write(gsw->host_bus, addr, MII_MMD_ACC_CTL_REG,
+	                           (MMD_DATA << MMD_CMD_S) |
+	                           ((devad << MMD_DEVAD_S) & MMD_DEVAD_M));
+	if (val < 0)
+		goto out;
 
 	val = gsw->host_bus->read(gsw->host_bus, addr, MII_MMD_ADDR_DATA_REG);
 
+out:
 	mutex_unlock(&gsw->host_bus->mdio_lock);
 
 	return val;
 }
 
-static void mt7530_mmd_write(struct gsw_mt753x *gsw, int addr, int devad,
+static int mt7530_mmd_write(struct gsw_mt753x *gsw, int addr, int devad,
                              u16 reg, u16 val)
 {
+	int ret;
+
 	if (addr < MT753X_NUM_PHYS)
 		addr = (gsw->phy_base + addr) & MT753X_SMI_ADDR_MASK;
 
 	mutex_lock(&gsw->host_bus->mdio_lock);
 
-	gsw->host_bus->write(gsw->host_bus, addr, MII_MMD_ACC_CTL_REG,
-	                     (MMD_ADDR << MMD_CMD_S) |
-	                     ((devad << MMD_DEVAD_S) & MMD_DEVAD_M));
+	ret = gsw->host_bus->write(gsw->host_bus, addr, MII_MMD_ACC_CTL_REG,
+	                           (MMD_ADDR << MMD_CMD_S) |
+	                           ((devad << MMD_DEVAD_S) & MMD_DEVAD_M));
+	if (ret < 0)
+		goto out;
 
-	gsw->host_bus->write(gsw->host_bus, addr, MII_MMD_ADDR_DATA_REG, reg);
+	ret = gsw->host_bus->write(gsw->host_bus, addr, MII_MMD_ADDR_DATA_REG, reg);
+	if (ret < 0)
+		goto out;
 
-	gsw->host_bus->write(gsw->host_bus, addr, MII_MMD_ACC_CTL_REG,
-	                     (MMD_DATA << MMD_CMD_S) |
-	                     ((devad << MMD_DEVAD_S) & MMD_DEVAD_M));
+	ret = gsw->host_bus->write(gsw->host_bus, addr, MII_MMD_ACC_CTL_REG,
+	                           (MMD_DATA << MMD_CMD_S) |
+	                           ((devad << MMD_DEVAD_S) & MMD_DEVAD_M));
+	if (ret < 0)
+		goto out;
 
-	gsw->host_bus->write(gsw->host_bus, addr, MII_MMD_ADDR_DATA_REG, val);
+	ret = gsw->host_bus->write(gsw->host_bus, addr, MII_MMD_ADDR_DATA_REG, val);
 
+out:
 	mutex_unlock(&gsw->host_bus->mdio_lock);
+
+	return ret;
 }
 
-static void mt7530_core_reg_write(struct gsw_mt753x *gsw, u32 reg, u32 val)
+static int mt7530_core_reg_write(struct gsw_mt753x *gsw, u32 reg, u32 val)
 {
-	gsw->mmd_write(gsw, 0, 0x1f, reg, val);
+	return gsw->mmd_write(gsw, 0, 0x1f, reg, val);
 }
 
-static void mt7530_trgmii_setting(struct gsw_mt753x *gsw)
+static int mt7530_trgmii_setting(struct gsw_mt753x *gsw)
 {
+	int ret;
 	u16 i;
 
-	mt7530_core_reg_write(gsw, CORE_PLL_GROUP5, 0x0780);
+	ret = mt7530_core_reg_write(gsw, CORE_PLL_GROUP5, 0x0780);
+	if (ret < 0)
+		return ret;
 	mdelay(1);
-	mt7530_core_reg_write(gsw, CORE_PLL_GROUP6, 0);
-	mt7530_core_reg_write(gsw, CORE_PLL_GROUP10, 0x87);
+	ret = mt7530_core_reg_write(gsw, CORE_PLL_GROUP6, 0);
+	if (ret < 0)
+		return ret;
+	ret = mt7530_core_reg_write(gsw, CORE_PLL_GROUP10, 0x87);
+	if (ret < 0)
+		return ret;
 	mdelay(1);
-	mt7530_core_reg_write(gsw, CORE_PLL_GROUP11, 0x87);
+	ret = mt7530_core_reg_write(gsw, CORE_PLL_GROUP11, 0x87);
+	if (ret < 0)
+		return ret;
 
 	/* PLL BIAS enable */
-	mt7530_core_reg_write(gsw, CORE_PLL_GROUP4,
-	                      RG_SYSPLL_DDSFBK_EN | RG_SYSPLL_BIAS_EN);
+	ret = mt7530_core_reg_write(gsw, CORE_PLL_GROUP4,
+	                            RG_SYSPLL_DDSFBK_EN | RG_SYSPLL_BIAS_EN);
+	if (ret < 0)
+		return ret;
 	mdelay(1);
 
 	/* PLL LPF enable */
-	mt7530_core_reg_write(gsw, CORE_PLL_GROUP4,
-	                      RG_SYSPLL_DDSFBK_EN |
-	                      RG_SYSPLL_BIAS_EN | RG_SYSPLL_BIAS_LPF_EN);
+	ret = mt7530_core_reg_write(gsw, CORE_PLL_GROUP4,
+	                            RG_SYSPLL_DDSFBK_EN |
+	                            RG_SYSPLL_BIAS_EN | RG_SYSPLL_BIAS_LPF_EN);
+	if (ret < 0)
+		return ret;
 
 	/* sys PLL enable */
-	mt7530_core_reg_write(gsw, CORE_PLL_GROUP2,
-	                      RG_SYSPLL_EN_NORMAL | RG_SYSPLL_VODEN |
-	                      (1 << RG_SYSPLL_POSDIV_S));
+	ret = mt7530_core_reg_write(gsw, CORE_PLL_GROUP2,
+	                            RG_SYSPLL_EN_NORMAL | RG_SYSPLL_VODEN |
+	                            (1 << RG_SYSPLL_POSDIV_S));
+	if (ret < 0)
+		return ret;
 
 	/* LCDDDS PWDS */
-	mt7530_core_reg_write(gsw, CORE_PLL_GROUP7,
-	                      (3 << RG_LCCDS_C_S) |
-	                      RG_LCDDS_PWDB | RG_LCDDS_ISO_EN);
+	ret = mt7530_core_reg_write(gsw, CORE_PLL_GROUP7,
+	                            (3 << RG_LCCDS_C_S) |
+	                            RG_LCDDS_PWDB | RG_LCDDS_ISO_EN);
+	if (ret < 0)
+		return ret;
 	mdelay(1);
 
 	/* Enable MT7530 TRGMII clock */
-	mt7530_core_reg_write(gsw, TRGMII_GSW_CLK_CG, GSWCK_EN | TRGMIICK_EN);
+	ret = mt7530_core_reg_write(gsw, TRGMII_GSW_CLK_CG, GSWCK_EN | TRGMIICK_EN);
+	if (ret < 0)
+		return ret;
 
 	/* lower Tx Driving */
-	for (i = 0 ; i < NUM_TRGMII_ODT; i++)
-		mt753x_reg_write(gsw, TRGMII_TD_ODT(i),
-		                 (4 << TX_DM_DRVP_S) | (4 << TX_DM_DRVN_S));
+	for (i = 0 ; i < NUM_TRGMII_ODT; i++) {
+		ret = mt753x_reg_write(gsw, TRGMII_TD_ODT(i),
+		                       (4 << TX_DM_DRVP_S) | (4 << TX_DM_DRVN_S));
+		if (ret < 0)
+			return ret;
+	}
+
+	return 0;
 }
 
-static void mt7530_rgmii_setting(struct gsw_mt753x *gsw)
+static int mt7530_rgmii_setting(struct gsw_mt753x *gsw)
 {
+	int ret;
 	u32 val;
 
-	mt7530_core_reg_write(gsw, CORE_PLL_GROUP5, 0x0c80);
+	ret = mt7530_core_reg_write(gsw, CORE_PLL_GROUP5, 0x0c80);
+	if (ret < 0)
+		return ret;
 	mdelay(1);
-	mt7530_core_reg_write(gsw, CORE_PLL_GROUP6, 0);
-	mt7530_core_reg_write(gsw, CORE_PLL_GROUP10, 0x87);
+	ret = mt7530_core_reg_write(gsw, CORE_PLL_GROUP6, 0);
+	if (ret < 0)
+		return ret;
+	ret = mt7530_core_reg_write(gsw, CORE_PLL_GROUP10, 0x87);
+	if (ret < 0)
+		return ret;
 	mdelay(1);
-	mt7530_core_reg_write(gsw, CORE_PLL_GROUP11, 0x87);
+	ret = mt7530_core_reg_write(gsw, CORE_PLL_GROUP11, 0x87);
+	if (ret < 0)
+		return ret;
 
-	val = mt753x_reg_read(gsw, TRGMII_TXCTRL);
+	ret = mt753x_reg_read_checked(gsw, TRGMII_TXCTRL, &val);
+	if (ret < 0)
+		return ret;
 	val &= ~TXC_INV;
-	mt753x_reg_write(gsw, TRGMII_TXCTRL, val);
+	ret = mt753x_reg_write(gsw, TRGMII_TXCTRL, val);
+	if (ret < 0)
+		return ret;
 
-	mt753x_reg_write(gsw, TRGMII_TCK_CTRL,
-	                 (8 << TX_TAP_S) | (0x55 << TX_TRAIN_WD_S));
+	ret = mt753x_reg_write(gsw, TRGMII_TCK_CTRL,
+	                       (8 << TX_TAP_S) | (0x55 << TX_TRAIN_WD_S));
+	if (ret < 0)
+		return ret;
+
+	return 0;
 }
 
 static int mt7530_mac_port_setup(struct gsw_mt753x *gsw)
 {
 	u32 hwstrap, p6ecr = 0, p5mcr, p6mcr, phyad;
+	int ret;
 
-	hwstrap = mt753x_reg_read(gsw, MHWSTRAP);
+	ret = mt753x_reg_read_checked(gsw, MHWSTRAP, &hwstrap);
+	if (ret < 0)
+		return ret;
 	hwstrap &= ~(P6_INTF_DIS | P5_INTF_MODE_RGMII | P5_INTF_DIS_S);
 	hwstrap |= P5_INTF_SEL_GMAC5;
 	if (!gsw->port5_cfg.enabled) {
@@ -422,81 +484,119 @@ parse_p6:
 		}
 	}
 
-	mt753x_reg_write(gsw, MHWSTRAP, hwstrap);
-	mt753x_reg_write(gsw, P6ECR, p6ecr);
+	ret = mt753x_reg_write(gsw, MHWSTRAP, hwstrap);
+	if (ret < 0)
+		return ret;
+	ret = mt753x_reg_write(gsw, P6ECR, p6ecr);
+	if (ret < 0)
+		return ret;
 
-	mt753x_reg_write(gsw, PMCR(5), p5mcr);
-	mt753x_reg_write(gsw, PMCR(6), p6mcr);
+	ret = mt753x_reg_write(gsw, PMCR(5), p5mcr);
+	if (ret < 0)
+		return ret;
+	ret = mt753x_reg_write(gsw, PMCR(6), p6mcr);
+	if (ret < 0)
+		return ret;
 
 	return 0;
 }
 
-static void mt7530_core_pll_setup(struct gsw_mt753x *gsw)
+static int mt7530_core_pll_setup(struct gsw_mt753x *gsw)
 {
+	int ret;
 	u32 hwstrap;
 
-	hwstrap = mt753x_reg_read(gsw, HWSTRAP);
+	ret = mt753x_reg_read_checked(gsw, HWSTRAP, &hwstrap);
+	if (ret < 0)
+		return ret;
 
 	switch ((hwstrap & XTAL_FSEL_M) >> XTAL_FSEL_S) {
 	case XTAL_40MHZ:
 		/* Disable MT7530 core clock */
-		mt7530_core_reg_write(gsw, TRGMII_GSW_CLK_CG, 0);
+		ret = mt7530_core_reg_write(gsw, TRGMII_GSW_CLK_CG, 0);
+		if (ret < 0)
+			return ret;
 
 		/* disable MT7530 PLL */
-		mt7530_core_reg_write(gsw, CORE_GSWPLL_GCR_1,
-		                      (2 << GSWPLL_POSTDIV_200M_S) |
-		                      (32 << GSWPLL_FBKDIV_200M_S));
+		ret = mt7530_core_reg_write(gsw, CORE_GSWPLL_GCR_1,
+		                            (2 << GSWPLL_POSTDIV_200M_S) |
+		                            (32 << GSWPLL_FBKDIV_200M_S));
+		if (ret < 0)
+			return ret;
 
 		/* For MT7530 core clock = 500Mhz */
-		mt7530_core_reg_write(gsw, CORE_GSWPLL_GCR_2,
-		                      (1 << GSWPLL_POSTDIV_500M_S) |
-		                      (25 << GSWPLL_FBKDIV_500M_S));
+		ret = mt7530_core_reg_write(gsw, CORE_GSWPLL_GCR_2,
+		                            (1 << GSWPLL_POSTDIV_500M_S) |
+		                            (25 << GSWPLL_FBKDIV_500M_S));
+		if (ret < 0)
+			return ret;
 
 		/* Enable MT7530 PLL */
-		mt7530_core_reg_write(gsw, CORE_GSWPLL_GCR_1,
-		                      (2 << GSWPLL_POSTDIV_200M_S) |
-		                      (32 << GSWPLL_FBKDIV_200M_S) |
-		                      GSWPLL_EN_PRE);
+		ret = mt7530_core_reg_write(gsw, CORE_GSWPLL_GCR_1,
+		                            (2 << GSWPLL_POSTDIV_200M_S) |
+		                            (32 << GSWPLL_FBKDIV_200M_S) |
+		                            GSWPLL_EN_PRE);
+		if (ret < 0)
+			return ret;
 
 		usleep_range(20, 40);
 
 		/* Enable MT7530 core clock */
-		mt7530_core_reg_write(gsw, TRGMII_GSW_CLK_CG, GSWCK_EN);
+		ret = mt7530_core_reg_write(gsw, TRGMII_GSW_CLK_CG, GSWCK_EN);
+		if (ret < 0)
+			return ret;
 		break;
 	default:
 		/* TODO: PLL settings for 20/25MHz */
 		break;
 	}
 
-	hwstrap = mt753x_reg_read(gsw, HWSTRAP);
+	ret = mt753x_reg_read_checked(gsw, HWSTRAP, &hwstrap);
+	if (ret < 0)
+		return ret;
 	hwstrap |= CHG_TRAP;
 	if (gsw->direct_phy_access)
 		hwstrap &= ~C_MDIO_BPS_S;
 	else
 		hwstrap |= C_MDIO_BPS_S;
 
-	mt753x_reg_write(gsw, MHWSTRAP, hwstrap);
+	ret = mt753x_reg_write(gsw, MHWSTRAP, hwstrap);
+	if (ret < 0)
+		return ret;
 
 	if (gsw->port6_cfg.enabled &&
 	        gsw->port6_cfg.phy_mode == PHY_INTERFACE_MODE_TRGMII) {
-		mt7530_trgmii_setting(gsw);
+		ret = mt7530_trgmii_setting(gsw);
+		if (ret < 0)
+			return ret;
 	} else {
 		/* RGMII */
-		mt7530_rgmii_setting(gsw);
+		ret = mt7530_rgmii_setting(gsw);
+		if (ret < 0)
+			return ret;
 	}
 
 	/* delay setting for 10/1000M */
-	mt753x_reg_write(gsw, P5RGMIIRXCR,
-	                 CSR_RGMII_EDGE_ALIGN |
-	                 (2 << CSR_RGMII_RXC_0DEG_CFG_S));
-	mt753x_reg_write(gsw, P5RGMIITXCR, 0x14 << CSR_RGMII_TXC_CFG_S);
+	ret = mt753x_reg_write(gsw, P5RGMIIRXCR,
+	                       CSR_RGMII_EDGE_ALIGN |
+	                       (2 << CSR_RGMII_RXC_0DEG_CFG_S));
+	if (ret < 0)
+		return ret;
+	ret = mt753x_reg_write(gsw, P5RGMIITXCR, 0x14 << CSR_RGMII_TXC_CFG_S);
+	if (ret < 0)
+		return ret;
+
+	return 0;
 }
 
 static int mt7530_sw_detect(struct gsw_mt753x *gsw, struct chip_rev *crev)
 {
 	u32 rev;
+	int ret;
 
-	rev = mt753x_reg_read(gsw, CHIP_REV);
+	ret = mt753x_reg_read_checked(gsw, CHIP_REV, &rev);
+	if (ret < 0)
+		return ret;
 
 	if (((rev & CHIP_NAME_M) >> CHIP_NAME_S) == MT7530) {
 		if (crev) {
@@ -507,41 +607,77 @@ static int mt7530_sw_detect(struct gsw_mt753x *gsw, struct chip_rev *crev)
 		return 0;
 	}
 
-	return -ENODEV;
+	return 1;
 }
 
-static void mt7530_phy_setting(struct gsw_mt753x *gsw)
+static int mt7530_phy_setting(struct gsw_mt753x *gsw)
 {
+	int ret;
 	int i;
-	u32 val;
+	int val;
 
 	for (i = 0; i < MT753X_NUM_PHYS; i++) {
 		/* Disable EEE */
-		gsw->mmd_write(gsw, i, PHY_DEV07, PHY_DEV07_REG_03C, 0);
+		ret = gsw->mmd_write(gsw, i, PHY_DEV07, PHY_DEV07_REG_03C, 0);
+		if (ret < 0)
+			goto restore_page;
 
 		/* Enable HW auto downshift */
-		gsw->mii_write(gsw, i, 0x1f, 0x1);
+		ret = gsw->mii_write(gsw, i, 0x1f, 0x1);
+		if (ret < 0)
+			goto restore_page;
 		val = gsw->mii_read(gsw, i, PHY_EXT_REG_14);
+		if (val < 0) {
+			gsw->mii_write(gsw, i, 0x1f, 0);
+			return val;
+		}
 		val |= PHY_EN_DOWN_SHFIT;
-		gsw->mii_write(gsw, i, PHY_EXT_REG_14, val);
+		ret = gsw->mii_write(gsw, i, PHY_EXT_REG_14, val);
+		if (ret < 0)
+			goto restore_page;
 
 		/* Increase SlvDPSready time */
-		gsw->mii_write(gsw, i, 0x1f, 0x52b5);
-		gsw->mii_write(gsw, i, PHY_TR_REG_10, 0xafae);
-		gsw->mii_write(gsw, i, PHY_TR_REG_12, 0x2f);
-		gsw->mii_write(gsw, i, PHY_TR_REG_10, 0x8fae);
+		ret = gsw->mii_write(gsw, i, 0x1f, 0x52b5);
+		if (ret < 0)
+			goto restore_page;
+		ret = gsw->mii_write(gsw, i, PHY_TR_REG_10, 0xafae);
+		if (ret < 0)
+			goto restore_page;
+		ret = gsw->mii_write(gsw, i, PHY_TR_REG_12, 0x2f);
+		if (ret < 0)
+			goto restore_page;
+		ret = gsw->mii_write(gsw, i, PHY_TR_REG_10, 0x8fae);
+		if (ret < 0)
+			goto restore_page;
 
 		/* Increase post_update_timer */
-		gsw->mii_write(gsw, i, 0x1f, 0x3);
-		gsw->mii_write(gsw, i, PHY_LPI_REG_11, 0x4b);
-		gsw->mii_write(gsw, i, 0x1f, 0);
+		ret = gsw->mii_write(gsw, i, 0x1f, 0x3);
+		if (ret < 0)
+			goto restore_page;
+		ret = gsw->mii_write(gsw, i, PHY_LPI_REG_11, 0x4b);
+		if (ret < 0)
+			goto restore_page;
+		ret = gsw->mii_write(gsw, i, 0x1f, 0);
+		if (ret < 0)
+			goto restore_page;
 
 		/* Adjust 100_mse_threshold */
-		gsw->mmd_write(gsw, i, PHY_DEV1E, PHY_DEV1E_REG_123, 0xffff);
+		ret = gsw->mmd_write(gsw, i, PHY_DEV1E, PHY_DEV1E_REG_123, 0xffff);
+		if (ret < 0)
+			goto restore_page;
 
 		/* Disable mcc */
-		gsw->mmd_write(gsw, i, PHY_DEV1E, PHY_DEV1E_REG_A6, 0x300);
+		ret = gsw->mmd_write(gsw, i, PHY_DEV1E, PHY_DEV1E_REG_A6, 0x300);
+		if (ret < 0)
+			goto restore_page;
 	}
+
+	return 0;
+
+restore_page:
+	/* Preserve the first error if restoring the standard page also fails. */
+	gsw->mii_write(gsw, i, 0x1f, 0);
+	return ret;
 }
 
 static inline bool get_phy_access_mode(const struct device_node *np)
@@ -551,19 +687,23 @@ static inline bool get_phy_access_mode(const struct device_node *np)
 
 static int mt7530_sw_init(struct gsw_mt753x *gsw)
 {
-	int i;
+	int i, phy_val, ret;
 	u32 val;
 
 	gsw->direct_phy_access = get_phy_access_mode(gsw->dev->of_node);
 
 	/* Force MT7530 to use (in)direct PHY access */
-	val = mt753x_reg_read(gsw, HWSTRAP);
+	ret = mt753x_reg_read_checked(gsw, HWSTRAP, &val);
+	if (ret < 0)
+		return ret;
 	val |= CHG_TRAP;
 	if (gsw->direct_phy_access)
 		val &= ~C_MDIO_BPS_S;
 	else
 		val |= C_MDIO_BPS_S;
-	mt753x_reg_write(gsw, MHWSTRAP, val);
+	ret = mt753x_reg_write(gsw, MHWSTRAP, val);
+	if (ret < 0)
+		return ret;
 
 	/* Read PHY address base from HWSTRAP */
 	gsw->phy_base  = (((val & SMI_ADDR_M) >> SMI_ADDR_S) << 3) + 8;
@@ -582,42 +722,59 @@ static int mt7530_sw_init(struct gsw_mt753x *gsw)
 	}
 
 	for (i = 0; i < MT753X_NUM_PHYS; i++) {
-		val = gsw->mii_read(gsw, i, MII_BMCR);
-		val |= BMCR_PDOWN;
-		gsw->mii_write(gsw, i, MII_BMCR, val);
+		phy_val = gsw->mii_read(gsw, i, MII_BMCR);
+		if (phy_val < 0)
+			return phy_val;
+		phy_val |= BMCR_PDOWN;
+		phy_val = gsw->mii_write(gsw, i, MII_BMCR, phy_val);
+		if (phy_val < 0)
+			return phy_val;
 	}
 
 	/* Force MAC link down before reset */
-	mt753x_reg_write(gsw, PMCR(5), FORCE_MODE);
-	mt753x_reg_write(gsw, PMCR(6), FORCE_MODE);
+	ret = mt753x_reg_write(gsw, PMCR(5), FORCE_MODE);
+	if (ret < 0)
+		return ret;
+	ret = mt753x_reg_write(gsw, PMCR(6), FORCE_MODE);
+	if (ret < 0)
+		return ret;
 
 	/* Switch soft reset */
 	/* BUG: sw reset causes gsw int flooding */
-	mt753x_reg_write(gsw, SYS_CTRL, SW_PHY_RST | SW_SYS_RST | SW_REG_RST);
+	ret = mt753x_reg_write(gsw, SYS_CTRL, SW_PHY_RST | SW_SYS_RST | SW_REG_RST);
+	if (ret < 0)
+		return ret;
 	usleep_range(10, 20);
 
 	/* global mac control settings configuration */
-	mt753x_reg_write(gsw, GMACCR,
-	                 LATE_COL_DROP | (15 << MTCC_LMT_S) |
-	                 (2 << MAX_RX_JUMBO_S) | RX_PKT_LEN_MAX_JUMBO);
+	ret = mt753x_reg_write(gsw, GMACCR,
+	                       LATE_COL_DROP | (15 << MTCC_LMT_S) |
+	                       (2 << MAX_RX_JUMBO_S) | RX_PKT_LEN_MAX_JUMBO);
+	if (ret < 0)
+		return ret;
 
-	mt7530_core_pll_setup(gsw);
-	mt7530_mac_port_setup(gsw);
-
-	return 0;
+	phy_val = mt7530_core_pll_setup(gsw);
+	if (phy_val < 0)
+		return phy_val;
+	return mt7530_mac_port_setup(gsw);
 }
 
 static int mt7530_sw_post_init(struct gsw_mt753x *gsw)
 {
-	int i;
-	u32 val;
+	int i, phy_val;
 
-	mt7530_phy_setting(gsw);
+	phy_val = mt7530_phy_setting(gsw);
+	if (phy_val < 0)
+		return phy_val;
 
 	for (i = 0; i < MT753X_NUM_PHYS; i++) {
-		val = gsw->mii_read(gsw, i, MII_BMCR);
-		val &= ~BMCR_PDOWN;
-		gsw->mii_write(gsw, i, MII_BMCR, val);
+		phy_val = gsw->mii_read(gsw, i, MII_BMCR);
+		if (phy_val < 0)
+			return phy_val;
+		phy_val &= ~BMCR_PDOWN;
+		phy_val = gsw->mii_write(gsw, i, MII_BMCR, phy_val);
+		if (phy_val < 0)
+			return phy_val;
 	}
 
 	return 0;

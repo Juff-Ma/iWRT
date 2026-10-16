@@ -1201,8 +1201,8 @@ void
 unregister_switch(struct switch_dev *dev)
 {
 	swconfig_destroy_led_trigger(dev);
-	mutex_lock(&dev->sw_mutex);
 	swconfig_lock();
+	mutex_lock(&dev->sw_mutex);
 	list_del(&dev->dev_list);
 	swconfig_unlock();
 	mutex_unlock(&dev->sw_mutex);

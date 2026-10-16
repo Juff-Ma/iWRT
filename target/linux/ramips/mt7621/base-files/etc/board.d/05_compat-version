@@ -25,9 +25,9 @@ case "$(board_name)" in
 	netgear,wndr3700-v5|\
 	phicomm,k2p|\
 	ruijie,rg-ew1800gx|\
-	xiaomi_mi-router-3g-nor|\
+	xiaomi,mi-router-3g-nor|\
 	xiaomi,mi-router-3g|\
-	xiaomi_mi-router-4|\
+	xiaomi,mi-router-4|\
 	xiaomi,mi-router-ac2100|\
 	xiaomi,mi-router-cr660x|\
 	xiaomi,redmi-router-ac2100|\

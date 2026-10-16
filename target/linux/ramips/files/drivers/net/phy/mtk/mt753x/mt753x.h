@@ -55,9 +55,7 @@ struct gsw_mt753x {
 	struct mii_bus *host_bus;
 	struct mii_bus *gphy_bus;
 	struct mutex mii_lock;	/* MII access lock */
-#ifdef CONFIG_SWCONFIG
-	struct mutex reg_mutex; /* protect among processes for registers access with swconfig api */
-#endif
+	struct mutex reg_mutex; /* Serialize register access by IRQ and swconfig paths. */
 	u32 smi_addr;
 	u32 phy_base;
 	int direct_phy_access;
@@ -77,18 +75,18 @@ struct gsw_mt753x {
 #ifdef CONFIG_SWCONFIG
 	struct switch_dev swdev;
 	u32 cpu_port;
-	u8 mirror_dest_port;
 #endif
+	u8 mirror_dest_port;
 
 	int global_vlan_enable;
 	struct mt753x_vlan_entry vlan_entries[MT753X_NUM_VLANS];
 	struct mt753x_port_entry port_entries[MT753X_NUM_PORTS];
 
 	int (*mii_read)(struct gsw_mt753x *gsw, int phy, int reg);
-	void (*mii_write)(struct gsw_mt753x *gsw, int phy, int reg, u16 val);
+	int (*mii_write)(struct gsw_mt753x *gsw, int phy, int reg, u16 val);
 
 	int (*mmd_read)(struct gsw_mt753x *gsw, int addr, int devad, u16 reg);
-	void (*mmd_write)(struct gsw_mt753x *gsw, int addr, int devad, u16 reg,
+	int (*mmd_write)(struct gsw_mt753x *gsw, int addr, int devad, u16 reg,
 	                  u16 val);
 
 	struct list_head list;
@@ -107,6 +105,7 @@ struct chip_rev {
 
 struct mt753x_sw_id {
 	enum mt753x_model model;
+	/* 0: matched, 1: not matched, negative: access error. */
 	int (*detect)(struct gsw_mt753x *gsw, struct chip_rev *crev);
 	int (*init)(struct gsw_mt753x *gsw);
 	int (*post_init)(struct gsw_mt753x *gsw);
@@ -119,22 +118,23 @@ struct gsw_mt753x *mt753x_get_first_gsw(void);
 void mt753x_put_gsw(void);
 void mt753x_lock_gsw(void);
 
+int mt753x_reg_read_checked(struct gsw_mt753x *gsw, u32 reg, u32 *value);
 u32 mt753x_reg_read(struct gsw_mt753x *gsw, u32 reg);
-void mt753x_reg_write(struct gsw_mt753x *gsw, u32 reg, u32 val);
+int mt753x_reg_write(struct gsw_mt753x *gsw, u32 reg, u32 val);
 
 int mt753x_mii_read(struct gsw_mt753x *gsw, int phy, int reg);
-void mt753x_mii_write(struct gsw_mt753x *gsw, int phy, int reg, u16 val);
+int mt753x_mii_write(struct gsw_mt753x *gsw, int phy, int reg, u16 val);
 
 int mt753x_mmd_read(struct gsw_mt753x *gsw, int addr, int devad, u16 reg);
-void mt753x_mmd_write(struct gsw_mt753x *gsw, int addr, int devad, u16 reg,
+int mt753x_mmd_write(struct gsw_mt753x *gsw, int addr, int devad, u16 reg,
                       u16 val);
 
 int mt753x_mmd_ind_read(struct gsw_mt753x *gsw, int addr, int devad, u16 reg);
-void mt753x_mmd_ind_write(struct gsw_mt753x *gsw, int addr, int devad, u16 reg,
+int mt753x_mmd_ind_write(struct gsw_mt753x *gsw, int addr, int devad, u16 reg,
                           u16 val);
 
 void mt753x_irq_worker(struct work_struct *work);
-void mt753x_irq_enable(struct gsw_mt753x *gsw);
+int mt753x_irq_enable(struct gsw_mt753x *gsw);
 
 /* MDIO Indirect Access Registers */
 #define MII_MMD_ACC_CTL_REG		0x0d

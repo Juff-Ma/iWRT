@@ -44,6 +44,10 @@
 
 #define UNIPHY_CH_CTRL(ch)		(UNIPHY_CH_BASE(ch) + 0x0)
 #define   UNIPHY_CH_SPEED_MODE		GENMASK(2, 1)
+/* Encoding shared with UNIPHY_CH_STS_SPEED_MODE */
+#define     UNIPHY_CH_SPEED_10		0
+#define     UNIPHY_CH_SPEED_100		1
+#define     UNIPHY_CH_SPEED_1000	2
 #define   UNIPHY_CH_FORCE_MODE		BIT(3)
 #define   UNIPHY_CH_AN_ENABLE		BIT(6)
 #define   UNIPHY_CH_AN_RESTART		BIT(7)
@@ -142,6 +146,8 @@ struct qca_uniphy {
 	struct clk_bulk_data *clks;
 	int num_clks;
 	struct qca_uniphy_pcs port_pcs[QCA_UNIPHY_CHANNELS];
+	/* USXGMII rate the code word carried at the last read */
+	int usxgmii_speed;
 	struct qca_uniphy_clk rx_clk;
 	struct qca_uniphy_clk tx_clk;
 	struct qca_uniphy_clk ref_clk;

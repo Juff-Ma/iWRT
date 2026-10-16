@@ -1,28 +1,36 @@
-#
-# Copyright (c) 2015 The Linux Foundation. All rights reserved.
-# Copyright (c) 2011-2015 OpenWrt.org
-#
+# SPDX-License-Identifier: GPL-2.0-only
 
 . /lib/functions/uci-defaults.sh
 . /lib/functions/system.sh
 
-an7563_setup_interfaces()
-{
-	local board="$1"
-
-	case "$board" in
-	airoha,an7563-evb)
-		ucidef_set_interface_lan "eth0"
-		;;
-	*)
-		echo "Unsupported hardware. Network interfaces not initialized"
-		;;
-	esac
-}
-
 board_config_update
-board=$(board_name)
-an7563_setup_interfaces $board
+
+case "$(board_name)" in
+tenda,be6l-pro)
+	ucidef_set_interfaces_lan_wan "lan2 lan3 lan4" "wan"
+
+	lan_mac=$(mtd_get_mac_ascii CFG HW_NIC0_ADDR)
+	if [ -n "$lan_mac" ]; then
+		ucidef_set_interface_macaddr "lan" "$lan_mac"
+		ucidef_set_interface_macaddr "wan" "$(macaddr_add "$lan_mac" 1)"
+		ucidef_set_label_macaddr "$lan_mac"
+	fi
+	;;
+xiaomi,be5000)
+	ucidef_set_interfaces_lan_wan "lan1 lan2 lan3" "wan"
+
+	lan_mac=$(mtd_get_mac_binary Factory 0x1ffff4)
+	wan_mac=$(mtd_get_mac_binary Factory 0x1ffffa)
+	if [ -n "$lan_mac" ]; then
+		ucidef_set_interface_macaddr "lan" "$lan_mac"
+		ucidef_set_label_macaddr "$lan_mac"
+	fi
+	if [ -n "$wan_mac" ]; then
+		ucidef_set_interface_macaddr "wan" "$wan_mac"
+	fi
+	;;
+esac
+
 board_config_flush
 
 exit 0

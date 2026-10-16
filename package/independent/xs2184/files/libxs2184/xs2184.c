@@ -33,7 +33,7 @@ static int xs_port_to_i2c[MAX_PORTS + 1] = {
 
 typedef struct {
 	float* watts;
-	u8 watch_counter;
+	uint32_t watch_counter;
 	u8 rollback;
 	u8 mark_has_pd;
 
@@ -70,8 +70,8 @@ static uint32_t port_enable_flag[MAX_PORTS + 1];
 #define MIN_LOAD_TRIG_mW_LB         0
 #define RECORD_INTERVAL             10
 #define RECORD_FORMAT               "%u %f %f %f %f %f %f %f %f \n"
-/* 86400 seconds per week*/
-#define UPDATE_FILE2_TIME           86400 //units: s
+/* One week in seconds. */
+#define UPDATE_FILE2_TIME           (7 * 86400)
 
 static u8 record_en = 0;
 static uint32_t record_time_up = 0;
@@ -130,18 +130,24 @@ static int xs_port_to_i2c_addr(u8 port_num)
 static int read_reg(u8 chip_addr, u8 reg_addr, u8 *reg_val)
 {
 	int file;
+	int value;
 	char file_name[64];
 
 	file = open_i2c_dev(BUS_NUM, file_name, sizeof(file_name), 0);
-	if (file < 0)
+	if (file < 0) {
 		fprintf(stderr, "open dev error.\n");
-	open_chip(file, chip_addr);
-
-	*reg_val = i2c_smbus_read_byte_data(file, reg_addr);
-	if (*reg_val < 0) {
-		fprintf(stderr, "read failed\n");
 		return -1;
 	}
+	if (open_chip(file, chip_addr) < 0)
+		return -1;
+
+	value = i2c_smbus_read_byte_data(file, reg_addr);
+	if (value < 0) {
+		fprintf(stderr, "read failed\n");
+		close(file);
+		return -1;
+	}
+	*reg_val = value;
 
 	close(file);
 
@@ -156,16 +162,21 @@ static int port_reg_read(u8 port_num, u8 reg_addr, u8 *reg_val)
 static int write_reg(u8 chip_addr, u8 reg_addr, u8 reg_val)
 {
 	int file;
+	int res;
 	char file_name[20];
 
 	file = open_i2c_dev(BUS_NUM, file_name, sizeof(file_name), 0);
-	if (file < 0)
+	if (file < 0) {
 		fprintf(stderr, "open dev error.\n");
-	open_chip(file, chip_addr);
+		return -1;
+	}
+	if (open_chip(file, chip_addr) < 0)
+		return -1;
 
-	int res = i2c_smbus_write_byte_data(file, reg_addr, reg_val);
+	res = i2c_smbus_write_byte_data(file, reg_addr, reg_val);
 	if (res < 0) {
 		fprintf(stderr, "write failed\n");
+		close(file);
 		return -1;
 	}
 
@@ -179,7 +190,7 @@ static int port_reg_write(u8 port_num, u8 reg_addr, u8 reg_val)
 	return write_reg(xs_port_to_i2c_addr(port_num), reg_addr, reg_val);
 }
 
-int open_chip(u8 file, u8 chip_addr)
+int open_chip(int file, u8 chip_addr)
 {
 	if (ioctl(file, I2C_SLAVE, chip_addr) < 0) {
 		close(file);
@@ -200,46 +211,49 @@ int chip_found( u8 chip_addr)
 		timeOut++;
 	} while((data != XS2184_ID_VAL)&&(timeOut < 5));
 
-	if((timeOut > 4) || (data != XS2184_ID_VAL))
+	if(data != XS2184_ID_VAL)
 		return -1;
 	else
 		return 0;
 }
 
-float port_current(char port_num)
+static int port_current(char port_num, float *curr)
 {
-	float curr;
-	uint32_t cur_msb = 0, cur_lsb = 0;
+	u8 cur_msb, cur_lsb;
 
-	port_reg_read(port_num, CURT_LSB(port_num), (u8*)&cur_lsb);
-	port_reg_read(port_num, CURT_MSB(port_num), (u8*)&cur_msb);
+	if (port_reg_read(port_num, CURT_LSB(port_num), &cur_lsb) < 0)
+		return -1;
+	if (port_reg_read(port_num, CURT_MSB(port_num), &cur_msb) < 0)
+		return -1;
 
-	curr = ((float)(cur_msb << 8 | cur_lsb) / 1000.0) * ((float)CURRENT_PARA / 1000.0); //mA
+	*curr = ((float)(cur_msb << 8 | cur_lsb) / 1000.0) * ((float)CURRENT_PARA / 1000.0); //mA
 
-	// fprintf(stdout, "port %u, current %u-%u, %.3f\n", port_num, cur_msb, cur_lsb, curr);
-	return curr;
+	// fprintf(stdout, "port %u, current %u-%u, %.3f\n", port_num, cur_msb, cur_lsb, *curr);
+	return 0;
 }
 
 typedef int (* ps_callback_t)(u8 en, u8 port_num, float volt, float curt);
 
-float port_voltage(char port_num)
+static int port_voltage(char port_num, float *volt)
 {
-	float volt;
-	uint32_t vol_msb = 0, vol_lsb = 0;
+	u8 vol_msb, vol_lsb;
 
-	port_reg_read(port_num, VOLT_LSB(port_num), (u8*)&vol_lsb);
-	port_reg_read(port_num, VOLT_MSB(port_num), (u8*)&vol_msb);
+	if (port_reg_read(port_num, VOLT_LSB(port_num), &vol_lsb) < 0)
+		return -1;
+	if (port_reg_read(port_num, VOLT_MSB(port_num), &vol_msb) < 0)
+		return -1;
 
-	volt = ((float)(vol_msb << 8 | vol_lsb) / 1000.0) * ((float)VOLTAGE_PARA / 1000.0); //uV - mV - V
+	*volt = ((float)(vol_msb << 8 | vol_lsb) / 1000.0) * ((float)VOLTAGE_PARA / 1000.0); //uV - mV - V
 
-	// fprintf(stdout, "port %u, volt %u-%u, %.3f\n", port_num, vol_lsb, vol_msb, volt);
-	return volt;
+	// fprintf(stdout, "port %u, volt %u-%u, %.3f\n", port_num, vol_lsb, vol_msb, *volt);
+	return 0;
 }
 
 static int save_date_file(uint32_t time, uint32_t line_bound, uint32_t time_bound, data_file *data,  char *fn) {
 	uint32_t i;
 	u8 port_num;
 	FILE *fp;
+	int error;
 
 	if(!(fp = fopen(RECORD_BUF_FILE, "w"))) {
 		fprintf(stderr, "error in writing %s\n", RECORD_BUF_FILE);
@@ -260,60 +274,84 @@ static int save_date_file(uint32_t time, uint32_t line_bound, uint32_t time_boun
 		}
 	}
 
-	fclose(fp);
+	error = ferror(fp);
+	if (fclose(fp))
+		error = 1;
+	if (error) {
+		fprintf(stderr, "error in writing %s\n", RECORD_BUF_FILE);
+		return -1;
+	}
 
-	rename(RECORD_BUF_FILE, fn);
+	if (rename(RECORD_BUF_FILE, fn)) {
+		fprintf(stderr, "error in replacing %s\n", fn);
+		return -1;
+	}
 
 	return 0;
 }
 
-static uint32_t read_data_file(uint32_t line_bound, data_file *date, char *fn) {
+static int read_data_file(uint32_t line_bound, data_file *date, char *fn) {
 	uint32_t times = 0;
 	FILE *fp;
-	char buf_file_line[100];
-
-	memset(&buf_file_line, 0, sizeof(buf_file_line));
+	int error;
+	char *buf_file_line = NULL;
+	size_t line_size = 0;
+	data_file entry;
 
 	if(!(fp = fopen(fn, "r"))) {
 		fprintf(stderr, "error in reading %s\n", fn);
 		return -1;
 	}
 
-	while(fgets(buf_file_line, sizeof(buf_file_line), fp) != NULL) {
+	while (getline(&buf_file_line, &line_size, fp) >= 0) {
+		memset(&entry, 0, sizeof(entry));
 		/* Check data format and discard which does not conform to the format */
 		if(sscanf(buf_file_line, RECORD_FORMAT,
-		          &date[times].ts, &date[times].pwr[1], &date[times].pwr[2],
-		          &date[times].pwr[3], &date[times].pwr[4], &date[times].pwr[5],
-		          &date[times].pwr[6], &date[times].pwr[7], &date[times].pwr[8]) != MAX_PORTS + 1) {
-			memset(&buf_file_line, 0, sizeof(buf_file_line));
+		          &entry.ts, &entry.pwr[1], &entry.pwr[2],
+		          &entry.pwr[3], &entry.pwr[4], &entry.pwr[5],
+		          &entry.pwr[6], &entry.pwr[7], &entry.pwr[8]) != MAX_PORTS + 1) {
 			continue;
 		}
-		memset(&buf_file_line, 0, sizeof(buf_file_line));
 
-		times++;
-		/* If 'times' greater than 'line_bound', the oldest data is discarded firstly. */
-		if(times == line_bound)
-			times = 0;
+		/* Keep the newest records in file order when the buffer is full. */
+		if (times == line_bound) {
+			memmove(date, date + 1, (line_bound - 1) * sizeof(*date));
+			times--;
+		}
+		date[times++] = entry;
 	}
-	fclose(fp);
+	error = ferror(fp) || !feof(fp);
+	free(buf_file_line);
+	if (fclose(fp))
+		error = 1;
+	if (error) {
+		fprintf(stderr, "error in reading %s\n", fn);
+		return -1;
+	}
 
 	return times;
 }
 
 int port_status(ps_callback_t cb)
 {
-	u8 reg = 0;
 	int i;
+	int status = 0;
+	int record_error = 0;
 	unsigned char bs[40] = "\0";
 
 	for(i=0; i<MAX_CHIPS; i++) {
 		u8 port_num;
+		u8 reg;
 		int addr = xs_i2c_addrs[i];
 
 		if(addr < 0)
 			continue;
 
-		(void)read_reg(addr, POWER_STA_REG, &reg);
+		if (read_reg(addr, POWER_STA_REG, &reg) < 0) {
+			status = -1;
+			record_error = 1;
+			continue;
+		}
 		itoa(reg, bs, sizeof(bs), 2);
 		if(!cb)
 			fprintf(stdout, "chip on 0x%02x state b'%s'\n", addr, bs);
@@ -323,23 +361,36 @@ int port_status(ps_callback_t cb)
 			u8 vp = i*4 + port_num;
 
 			if(!en) {
-				if(cb)
-					cb(en, vp, 0, 0);
+				if (cb && cb(en, vp, 0, 0) < 0)
+					status = -1;
 				continue;
 			}
 
-			volt = port_voltage(vp);    //V
-			curt = port_current(vp);    //mA
-			if(cb)
-				cb(en, vp, volt, curt);
-			else
+			if (port_voltage(vp, &volt) < 0 ||
+			    port_current(vp, &curt) < 0) {
+				status = -1;
+				record_error = 1;
+				continue;
+			}
+			if(cb) {
+				if (cb(en, vp, volt, curt) < 0)
+					status = -1;
+			} else
 				fprintf(stderr, "port %u volt/V %.2f curt/mA %.2f m-watts %.3f\n",
 				        vp, volt, curt, volt * curt);
 		}
 	}
 
+	/* Discard an incomplete window so port averages remain synchronized. */
+	if (record_en && record_error) {
+		for (i = 1; i <= MAX_PORTS; i++)
+			g_pwatts[i].watch_counter_r = 0;
+		record_time_up = 0;
+	}
+
 	if(record_time_up) {
 		FILE *fp;
+		int error;
 		u8 port_num;
 		uint32_t now_time = time(NULL);
 		uint32_t update_file1_time = record_times*10;
@@ -360,7 +411,13 @@ int port_status(ps_callback_t cb)
 		fprintf(fp, "%.2f ", g_pwatts[port_num].ave_watts_r);
 		fprintf(fp, "\n");
 
-		fclose(fp);
+		error = ferror(fp);
+		if (fclose(fp))
+			error = 1;
+		if (error) {
+			fprintf(stderr, "error in writing %s\n", RECORD_FILE);
+			return -1;
+		}
 
 		/**
 		 * Every 3 hours, keeping the data of the last 3 hours in file1
@@ -368,7 +425,7 @@ int port_status(ps_callback_t cb)
 		 */
 		if(now_time - last_save_time >= update_file1_time) {
 			int ret;
-			uint32_t times = 0;
+			int times = 0;
 			float total_pwr[MAX_PORTS+1] = {0.0};
 			data_file data_file1[max_lines_file1];
 			data_file data_file2[max_lines_file2];
@@ -376,10 +433,8 @@ int port_status(ps_callback_t cb)
 			memset(&data_file1, 0, sizeof(data_file1));
 			memset(&data_file2, 0, sizeof(data_file2));
 
-			foreach_port(port_num) {
-				total_pwr[port_num] = g_pwatts[port_num].ave_watts_day_r;
-				g_pwatts[port_num].ave_watts_day_r = 0.0;
-			}
+			foreach_port(port_num)
+			total_pwr[port_num] = g_pwatts[port_num].ave_watts_day_r;
 
 			ret = read_data_file(max_lines_file1, data_file1, (char *)RECORD_FILE);
 			if(ret < 0) {
@@ -398,6 +453,11 @@ int port_status(ps_callback_t cb)
 				return -1;
 			}
 
+			if (times == max_lines_file2) {
+				memmove(data_file2, data_file2 + 1,
+				        (max_lines_file2 - 1) * sizeof(*data_file2));
+				times--;
+			}
 			data_file2[times].ts = now_time;
 			foreach_port(port_num)
 			data_file2[times].pwr[port_num] = total_pwr[port_num];
@@ -407,10 +467,12 @@ int port_status(ps_callback_t cb)
 				return -1;
 			}
 
+			foreach_port(port_num)
+			g_pwatts[port_num].ave_watts_day_r = 0.0;
 			last_save_time = now_time;
 		}
 	}
-	return 0;
+	return status;
 }
 
 int enable_port(char port_num)
@@ -434,6 +496,7 @@ int port_monitor(u8 en, u8 vp, float volt, float curt)
 	float mWatt = volt * curt;
 	port_watt_t* pw = &g_pwatts[vp];
 	int reboot_value = rb_watts[vp];
+	int ret = 0;
 
 	pw->watts[pw->watch_counter++] = mWatt;
 	if (record_en) {
@@ -461,13 +524,21 @@ int port_monitor(u8 en, u8 vp, float volt, float curt)
 
 		av_mWatt /= counter;
 		if(av_mWatt < reboot_value && pw->rollback && pw->mark_has_pd) {
+			if (disable_port(vp) < 0) {
+				fprintf(stderr, "Failed to disable port %u\n", vp);
+				ret = -1;
+				goto out;
+			}
 			pw->mark_has_pd = 0;
 			pw->rollback = 0;
 			pw->watch_counter = 0;
 			fprintf(stdout, "port %u closed with avg %.3f mW, thd %d mW\n", vp, av_mWatt, reboot_value);
-			disable_port(vp);
 			sleep(1);
-			enable_port(vp);
+			if (enable_port(vp) < 0) {
+				fprintf(stderr, "Failed to enable port %u\n", vp);
+				ret = -1;
+				goto out;
+			}
 		} else if(av_mWatt >= reboot_value) {
 			pw->mark_has_pd = 1;
 			fprintf(stdout, "port %u, current %u has %0.2f mW, round avg %.3f mW, thd %d mW\n",
@@ -482,7 +553,11 @@ int port_monitor(u8 en, u8 vp, float volt, float curt)
 
 		if(!port_enable_flag[vp]) {
 			fprintf(stdout, "shut down port %u \n", vp);
-			disable_port(vp);
+			if (disable_port(vp) < 0) {
+				fprintf(stderr, "Failed to disable port %u\n", vp);
+				ret = -1;
+				goto out;
+			}
 			sleep(1);
 		}
 	} else {
@@ -493,14 +568,19 @@ int port_monitor(u8 en, u8 vp, float volt, float curt)
 			pw->mark_has_pd = 0;
 			/* power on & wait PD */
 			fprintf(stdout, "port %u enable again PD detection\n", vp);
-			enable_port(vp);
+			if (enable_port(vp) < 0) {
+				fprintf(stderr, "Failed to enable port %u\n", vp);
+				ret = -1;
+				goto out;
+			}
 			sleep(1);   /* must keep it. */
 		}
 	}
+out:
 	if(pw->watch_counter == max_average_watts)
 		pw->watch_counter = 0;
 
-	return 0;
+	return ret;
 }
 
 static void get_record(char *fn, int bound, data_file *date) {
@@ -651,7 +731,7 @@ static void config_parse_globals(struct uci_context *c, struct uci_section *s) {
 	if(record_times < RECORD_TIME_LB || record_times > RECORD_TIME_UB)
 		record_times = RECORD_TIME_UB;
 }
-static void save_item_uci(struct uci_ptr ptr, struct uci_context *ctx, \
+static int save_item_uci(struct uci_ptr ptr, struct uci_context *ctx, \
                           struct uci_package *p, char *section, char *option, char *value) {
 	ptr.package = CONFIG_FN;
 	ptr.o = NULL;
@@ -659,7 +739,7 @@ static void save_item_uci(struct uci_ptr ptr, struct uci_context *ctx, \
 	ptr.section = section;
 	ptr.option = option;
 	ptr.value = value;
-	uci_set(ctx, &ptr);
+	return uci_set(ctx, &ptr);
 }
 
 int main(int argc, char *argv[])
@@ -703,15 +783,22 @@ int main(int argc, char *argv[])
 
 		if (!strncmp(s->type, "port", 4)) {
 			const char *enable = NULL, *pwr_thd = NULL;
-			int port_uci = 0;
+			int port_uci;
+			char port_name[16];
 
-			sscanf(s->e.name, "port%d", &port_uci);
-			if (port_uci < 1 || port_uci > MAX_PORTS)
-				port_uci = 1;
+			for (port_uci = 1; port_uci <= MAX_PORTS; port_uci++) {
+				snprintf(port_name, sizeof(port_name), "port%d", port_uci);
+				if (!strcmp(s->e.name, port_name))
+					break;
+			}
+			if (port_uci > MAX_PORTS) {
+				fprintf(stderr, "Invalid port section %s\n", s->e.name);
+				continue;
+			}
 
 			enable = uci_lookup_option_string(ctx, s, "enable");
 
-			if (!strcmp(enable, "1")) {
+			if (enable && !strcmp(enable, "1")) {
 				port_enable_flag[port_uci] = 1;
 				if (enable_port(port_uci) < 0)
 					fprintf(stderr, "Failed to open port %d\n", port_uci);
@@ -731,36 +818,48 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	struct uci_ptr ptr;
+	struct uci_ptr ptr = {0};
 	ptr.p = p;
 
 	while ((c = getopt(argc, argv, "d:u:m:cr:s:t:")) != -1) {
 		switch (c) {
 		case 'c':
-			if (port_status(NULL) < 0)
-				fprintf(stderr, "no PD on port.\n");
+			if (port_status(NULL) < 0) {
+				fprintf(stderr, "Failed to read port status\n");
+				goto operation_err;
+			}
 			break;
 		case 'u':
 			port = atoi(optarg);
 			if (port < 1 || port > MAX_PORTS)
 				goto input_err;
 
-			enable_port(port);
+			if (enable_port(port) < 0) {
+				fprintf(stderr, "Failed to enable port %d\n", port);
+				goto operation_err;
+			}
+			port_enable_flag[port] = 1;
 
 			memset(&buf, 0, sizeof(buf));
 			sprintf(buf, "port%d", port);
-			save_item_uci(ptr, ctx, p, buf, "enable", "1");
+			if (save_item_uci(ptr, ctx, p, buf, "enable", "1"))
+				goto config_err;
 			break;
 		case 'd':
 			port = atoi(optarg);
 			if (port < 1 || port > MAX_PORTS)
 				goto input_err;
 
-			disable_port(port);
+			if (disable_port(port) < 0) {
+				fprintf(stderr, "Failed to disable port %d\n", port);
+				goto operation_err;
+			}
+			port_enable_flag[port] = 0;
 
 			memset(&buf, 0, sizeof(buf));
 			sprintf(buf, "port%d", port);
-			save_item_uci(ptr, ctx, p, buf, "enable", "0");
+			if (save_item_uci(ptr, ctx, p, buf, "enable", "0"))
+				goto config_err;
 			break;
 		case 'm':
 			statistic_inteval = atoi(optarg);
@@ -768,13 +867,15 @@ int main(int argc, char *argv[])
 				goto input_err;
 
 			monitor_enable = 1;
-			save_item_uci(ptr, ctx, p, "globals", "interval", optarg);
+			if (save_item_uci(ptr, ctx, p, "globals", "interval", optarg))
+				goto config_err;
 			break;
 		case 's':
 			max_average_watts = atoi(optarg);
 			if (max_average_watts < MAX_AVERAGE_LB || max_average_watts > MAX_AVERAGE_UB)
 				goto input_err;
-			save_item_uci(ptr, ctx, p, "globals", "round", optarg);
+			if (save_item_uci(ptr, ctx, p, "globals", "round", optarg))
+				goto config_err;
 			break;
 		case 'r':
 			if (port < 1 || port > MAX_PORTS)
@@ -786,7 +887,8 @@ int main(int argc, char *argv[])
 
 			memset(&buf, 0, sizeof(buf));
 			sprintf(buf, "port%d", port);
-			save_item_uci(ptr, ctx, p, buf, "pwr_thd", optarg);
+			if (save_item_uci(ptr, ctx, p, buf, "pwr_thd", optarg))
+				goto config_err;
 			break;
 		case 't':
 			if (!strcmp(optarg, "1"))
@@ -796,7 +898,8 @@ int main(int argc, char *argv[])
 			else
 				goto input_err;
 
-			save_item_uci(ptr, ctx, p, "globals", "record_en", optarg);
+			if (save_item_uci(ptr, ctx, p, "globals", "record_en", optarg))
+				goto config_err;
 			break;
 		case '?':
 		default:
@@ -806,14 +909,22 @@ int main(int argc, char *argv[])
 
 	show_config();
 
-	uci_save(ctx, ptr.p);
-	uci_commit(ctx, &ptr.p, false);
+	if (uci_save(ctx, ptr.p))
+		goto config_err;
+	if (uci_commit(ctx, &ptr.p, false))
+		goto config_err;
 
 	if (monitor_enable) {
 		return run_monitor();
 	}
 
 	return 0;
+
+config_err:
+	uci_perror(ctx, "Failed to update xs2184 configuration");
+operation_err:
+	uci_free_context(ctx);
+	return -1;
 
 input_err:
 	help();

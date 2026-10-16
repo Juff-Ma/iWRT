@@ -224,6 +224,7 @@ static int mt7531_set_port_sgmii_force_mode(struct gsw_mt753x *gsw, u32 port,
 	u32 speed, port_base, val;
 	ktime_t timeout;
 	u32 timeout_us;
+	int ret;
 
 	if (port < 5 || port >= MT753X_NUM_PORTS) {
 		dev_info(gsw->dev, "port %d is not a SGMII port\n", port);
@@ -247,18 +248,28 @@ static int mt7531_set_port_sgmii_force_mode(struct gsw_mt753x *gsw, u32 port,
 	}
 
 	/* Step 1: Speed select register setting */
-	val = mt753x_reg_read(gsw, PHYA_CTRL_SIGNAL3(port_base));
+	ret = mt753x_reg_read_checked(gsw, PHYA_CTRL_SIGNAL3(port_base), &val);
+	if (ret < 0)
+		return ret;
 	val &= ~RG_TPHY_SPEED_M;
 	val |= speed << RG_TPHY_SPEED_S;
-	mt753x_reg_write(gsw, PHYA_CTRL_SIGNAL3(port_base), val);
+	ret = mt753x_reg_write(gsw, PHYA_CTRL_SIGNAL3(port_base), val);
+	if (ret < 0)
+		return ret;
 
 	/* Step 2 : Disable AN */
-	val = mt753x_reg_read(gsw, PCS_CONTROL_1(port_base));
+	ret = mt753x_reg_read_checked(gsw, PCS_CONTROL_1(port_base), &val);
+	if (ret < 0)
+		return ret;
 	val &= ~SGMII_AN_ENABLE;
-	mt753x_reg_write(gsw, PCS_CONTROL_1(port_base), val);
+	ret = mt753x_reg_write(gsw, PCS_CONTROL_1(port_base), val);
+	if (ret < 0)
+		return ret;
 
 	/* Step 3: SGMII force mode setting */
-	val = mt753x_reg_read(gsw, SGMII_MODE(port_base));
+	ret = mt753x_reg_read_checked(gsw, SGMII_MODE(port_base), &val);
+	if (ret < 0)
+		return ret;
 	val &= ~SGMII_IF_MODE_ADVERT_AN;
 	val &= ~SGMII_IF_MODE_FORCE_SPEED_M;
 	val |= SGMII_IF_MODE_FORCE_SPEED_1000 << SGMII_IF_MODE_FORCE_SPEED_S;
@@ -267,29 +278,38 @@ static int mt7531_set_port_sgmii_force_mode(struct gsw_mt753x *gsw, u32 port,
 	if (port_cfg->duplex)
 		val &= ~SGMII_IF_MODE_FORCE_DUPLEX;
 
-	mt753x_reg_write(gsw, SGMII_MODE(port_base), val);
+	ret = mt753x_reg_write(gsw, SGMII_MODE(port_base), val);
+	if (ret < 0)
+		return ret;
 
 	/* Step 4: XXX: Disable Link partner's AN and set force mode */
 
 	/* Step 5: XXX: Special setting for PHYA ==> reserved for flexible */
 
 	/* Step 6 : Release PHYA power down state */
-	val = mt753x_reg_read(gsw, QPHY_PWR_STATE_CTRL(port_base));
+	ret = mt753x_reg_read_checked(gsw, QPHY_PWR_STATE_CTRL(port_base), &val);
+	if (ret < 0)
+		return ret;
 	val &= ~PHYA_PWD;
-	mt753x_reg_write(gsw, QPHY_PWR_STATE_CTRL(port_base), val);
+	ret = mt753x_reg_write(gsw, QPHY_PWR_STATE_CTRL(port_base), val);
+	if (ret < 0)
+		return ret;
 
 	/* Step 7 : Polling SGMII_LINK_STATUS */
 	timeout_us = 2000000;
 	timeout = ktime_add_us(ktime_get(), timeout_us);
 	while (1) {
-		val = mt753x_reg_read(gsw, PCS_CONTROL_1(port_base));
+		ret = mt753x_reg_read_checked(gsw, PCS_CONTROL_1(port_base), &val);
+		if (ret < 0)
+			return ret;
 		val &= SGMII_LINK_STATUS;
 
 		if (val)
 			break;
 
+		/* The link may come up after initialization. */
 		if (ktime_compare(ktime_get(), timeout) > 0)
-			return -ETIMEDOUT;
+			break;
 	}
 
 	return 0;
@@ -301,6 +321,7 @@ static int mt7531_set_port_sgmii_an_mode(struct gsw_mt753x *gsw, u32 port,
 	u32 speed, port_base, val;
 	ktime_t timeout;
 	u32 timeout_us;
+	int ret;
 
 	if (port < 5 || port >= MT753X_NUM_PORTS) {
 		dev_info(gsw->dev, "port %d is not a SGMII port\n", port);
@@ -324,24 +345,36 @@ static int mt7531_set_port_sgmii_an_mode(struct gsw_mt753x *gsw, u32 port,
 	}
 
 	/* Step 1: Speed select register setting */
-	val = mt753x_reg_read(gsw, PHYA_CTRL_SIGNAL3(port_base));
+	ret = mt753x_reg_read_checked(gsw, PHYA_CTRL_SIGNAL3(port_base), &val);
+	if (ret < 0)
+		return ret;
 	val &= ~RG_TPHY_SPEED_M;
 	val |= speed << RG_TPHY_SPEED_S;
-	mt753x_reg_write(gsw, PHYA_CTRL_SIGNAL3(port_base), val);
+	ret = mt753x_reg_write(gsw, PHYA_CTRL_SIGNAL3(port_base), val);
+	if (ret < 0)
+		return ret;
 
 	/* Step 2: Remote fault disable */
-	val = mt753x_reg_read(gsw, SGMII_MODE(port));
+	ret = mt753x_reg_read_checked(gsw, SGMII_MODE(port_base), &val);
+	if (ret < 0)
+		return ret;
 	val |= SGMII_REMOTE_FAULT_DIS;
-	mt753x_reg_write(gsw, SGMII_MODE(port), val);
+	ret = mt753x_reg_write(gsw, SGMII_MODE(port_base), val);
+	if (ret < 0)
+		return ret;
 
 	/* Step 3: Setting Link partner's AN enable = 1 */
 
 	/* Step 4: Setting Link partner's device ability for speed/duplex */
 
 	/* Step 5: AN re-start */
-	val = mt753x_reg_read(gsw, PCS_CONTROL_1(port));
+	ret = mt753x_reg_read_checked(gsw, PCS_CONTROL_1(port_base), &val);
+	if (ret < 0)
+		return ret;
 	val |= SGMII_AN_RESTART;
-	mt753x_reg_write(gsw, PCS_CONTROL_1(port), val);
+	ret = mt753x_reg_write(gsw, PCS_CONTROL_1(port_base), val);
+	if (ret < 0)
+		return ret;
 
 	/* Step 6: Special setting for PHYA ==> reserved for flexible */
 
@@ -349,14 +382,17 @@ static int mt7531_set_port_sgmii_an_mode(struct gsw_mt753x *gsw, u32 port,
 	timeout_us = 2000000;
 	timeout = ktime_add_us(ktime_get(), timeout_us);
 	while (1) {
-		val = mt753x_reg_read(gsw, PCS_CONTROL_1(port_base));
+		ret = mt753x_reg_read_checked(gsw, PCS_CONTROL_1(port_base), &val);
+		if (ret < 0)
+			return ret;
 		val &= SGMII_LINK_STATUS;
 
 		if (val)
 			break;
 
+		/* The link may come up after initialization. */
 		if (ktime_compare(ktime_get(), timeout) > 0)
-			return -ETIMEDOUT;
+			break;
 	}
 
 	return 0;
@@ -365,6 +401,7 @@ static int mt7531_set_port_sgmii_an_mode(struct gsw_mt753x *gsw, u32 port,
 static int mt7531_set_port_rgmii(struct gsw_mt753x *gsw, u32 port)
 {
 	u32 val;
+	int ret;
 
 	if (port != 5) {
 		dev_info(gsw->dev, "RGMII mode is not available for port %d\n",
@@ -372,7 +409,9 @@ static int mt7531_set_port_rgmii(struct gsw_mt753x *gsw, u32 port)
 		return -EINVAL;
 	}
 
-	val = mt753x_reg_read(gsw, CLKGEN_CTRL);
+	ret = mt753x_reg_read_checked(gsw, CLKGEN_CTRL, &val);
+	if (ret < 0)
+		return ret;
 	val |= GP_CLK_EN;
 	val &= ~GP_MODE_M;
 	val |= GP_MODE_RGMII << GP_MODE_S;
@@ -382,7 +421,9 @@ static int mt7531_set_port_rgmii(struct gsw_mt753x *gsw, u32 port)
 	val |= CLK_SKEW_IN_NO_CHANGE << CLK_SKEW_IN_S;
 	val &= ~CLK_SKEW_OUT_M;
 	val |= CLK_SKEW_OUT_NO_CHANGE << CLK_SKEW_OUT_S;
-	mt753x_reg_write(gsw, CLKGEN_CTRL, val);
+	ret = mt753x_reg_write(gsw, CLKGEN_CTRL, val);
+	if (ret < 0)
+		return ret;
 
 	return 0;
 }
@@ -392,6 +433,7 @@ static int mt7531_mac_port_setup(struct gsw_mt753x *gsw, u32 port,
 {
 	u32 pmcr;
 	u32 speed;
+	int ret;
 
 	if (port < 5 || port >= MT753X_NUM_PORTS) {
 		dev_info(gsw->dev, "port %d is not a MAC port\n", port);
@@ -426,13 +468,17 @@ static int mt7531_mac_port_setup(struct gsw_mt753x *gsw, u32 port,
 
 	switch (port_cfg->phy_mode) {
 	case PHY_INTERFACE_MODE_RGMII:
-		mt7531_set_port_rgmii(gsw, port);
+		ret = mt7531_set_port_rgmii(gsw, port);
+		if (ret < 0)
+			return ret;
 		break;
 	case PHY_INTERFACE_MODE_SGMII:
 		if (port_cfg->force_link)
-			mt7531_set_port_sgmii_force_mode(gsw, port, port_cfg);
+			ret = mt7531_set_port_sgmii_force_mode(gsw, port, port_cfg);
 		else
-			mt7531_set_port_sgmii_an_mode(gsw, port, port_cfg);
+			ret = mt7531_set_port_sgmii_an_mode(gsw, port, port_cfg);
+		if (ret < 0)
+			return ret;
 		break;
 	default:
 		if (port_cfg->enabled)
@@ -442,145 +488,238 @@ static int mt7531_mac_port_setup(struct gsw_mt753x *gsw, u32 port,
 		pmcr = FORCE_MODE_LNK;
 	}
 
-	mt753x_reg_write(gsw, PMCR(port), pmcr);
-
-	return 0;
+	return mt753x_reg_write(gsw, PMCR(port), pmcr);
 }
 
-static void mt7531_core_pll_setup(struct gsw_mt753x *gsw)
+static int mt7531_core_pll_setup(struct gsw_mt753x *gsw)
 {
 	u32 hwstrap;
 	u32 val;
+	int ret;
 
-	val = mt753x_reg_read(gsw, TOP_SIG_SR);
+	ret = mt753x_reg_read_checked(gsw, TOP_SIG_SR, &val);
+	if (ret < 0)
+		return ret;
 	if (val & PAD_DUAL_SGMII_EN)
-		return;
+		return 0;
 
-	hwstrap = mt753x_reg_read(gsw, HWSTRAP);
+	ret = mt753x_reg_read_checked(gsw, HWSTRAP, &hwstrap);
+	if (ret < 0)
+		return ret;
 
 	switch ((hwstrap & XTAL_FSEL_M) >> XTAL_FSEL_S) {
 	case XTAL_25MHZ:
 		/* Step 1 : Disable MT7531 COREPLL */
-		val = mt753x_reg_read(gsw, PLLGP_EN);
+		ret = mt753x_reg_read_checked(gsw, PLLGP_EN, &val);
+		if (ret < 0)
+			return ret;
 		val &= ~EN_COREPLL;
-		mt753x_reg_write(gsw, PLLGP_EN, val);
+		ret = mt753x_reg_write(gsw, PLLGP_EN, val);
+		if (ret < 0)
+			return ret;
 
 		/* Step 2: switch to XTAL output */
-		val = mt753x_reg_read(gsw, PLLGP_EN);
+		ret = mt753x_reg_read_checked(gsw, PLLGP_EN, &val);
+		if (ret < 0)
+			return ret;
 		val |= SW_CLKSW;
-		mt753x_reg_write(gsw, PLLGP_EN, val);
+		ret = mt753x_reg_write(gsw, PLLGP_EN, val);
+		if (ret < 0)
+			return ret;
 
-		val = mt753x_reg_read(gsw, PLLGP_CR0);
+		ret = mt753x_reg_read_checked(gsw, PLLGP_CR0, &val);
+		if (ret < 0)
+			return ret;
 		val &= ~RG_COREPLL_EN;
-		mt753x_reg_write(gsw, PLLGP_CR0, val);
+		ret = mt753x_reg_write(gsw, PLLGP_CR0, val);
+		if (ret < 0)
+			return ret;
 
 		/* Step 3: disable PLLGP and enable program PLLGP */
-		val = mt753x_reg_read(gsw, PLLGP_EN);
+		ret = mt753x_reg_read_checked(gsw, PLLGP_EN, &val);
+		if (ret < 0)
+			return ret;
 		val |= SW_PLLGP;
-		mt753x_reg_write(gsw, PLLGP_EN, val);
+		ret = mt753x_reg_write(gsw, PLLGP_EN, val);
+		if (ret < 0)
+			return ret;
 
 		/* Step 4: program COREPLL output frequency to 500MHz */
-		val = mt753x_reg_read(gsw, PLLGP_CR0);
+		ret = mt753x_reg_read_checked(gsw, PLLGP_CR0, &val);
+		if (ret < 0)
+			return ret;
 		val &= ~RG_COREPLL_POSDIV_M;
 		val |= 2 << RG_COREPLL_POSDIV_S;
-		mt753x_reg_write(gsw, PLLGP_CR0, val);
+		ret = mt753x_reg_write(gsw, PLLGP_CR0, val);
+		if (ret < 0)
+			return ret;
 		usleep_range(25, 35);
 
-		val = mt753x_reg_read(gsw, PLLGP_CR0);
+		ret = mt753x_reg_read_checked(gsw, PLLGP_CR0, &val);
+		if (ret < 0)
+			return ret;
 		val &= ~RG_COREPLL_SDM_PCW_M;
 		val |= 0x140000 << RG_COREPLL_SDM_PCW_S;
-		mt753x_reg_write(gsw, PLLGP_CR0, val);
+		ret = mt753x_reg_write(gsw, PLLGP_CR0, val);
+		if (ret < 0)
+			return ret;
 
 		/* Set feedback divide ratio update signal to high */
-		val = mt753x_reg_read(gsw, PLLGP_CR0);
+		ret = mt753x_reg_read_checked(gsw, PLLGP_CR0, &val);
+		if (ret < 0)
+			return ret;
 		val |= RG_COREPLL_SDM_PCW_CHG;
-		mt753x_reg_write(gsw, PLLGP_CR0, val);
+		ret = mt753x_reg_write(gsw, PLLGP_CR0, val);
+		if (ret < 0)
+			return ret;
 		/* Wait for at least 16 XTAL clocks */
 		usleep_range(10, 20);
 
 		/* Step 5: set feedback divide ratio update signal to low */
-		val = mt753x_reg_read(gsw, PLLGP_CR0);
+		ret = mt753x_reg_read_checked(gsw, PLLGP_CR0, &val);
+		if (ret < 0)
+			return ret;
 		val &= ~RG_COREPLL_SDM_PCW_CHG;
-		mt753x_reg_write(gsw, PLLGP_CR0, val);
+		ret = mt753x_reg_write(gsw, PLLGP_CR0, val);
+		if (ret < 0)
+			return ret;
 
 		/* Enable 325M clock for SGMII */
-		mt753x_reg_write(gsw, ANA_PLLGP_CR5, 0xad0000);
+		ret = mt753x_reg_write(gsw, ANA_PLLGP_CR5, 0xad0000);
+		if (ret < 0)
+			return ret;
 
 		/* Enable 250SSC clock for RGMII */
-		mt753x_reg_write(gsw, ANA_PLLGP_CR2, 0x4f40000);
+		ret = mt753x_reg_write(gsw, ANA_PLLGP_CR2, 0x4f40000);
+		if (ret < 0)
+			return ret;
 
 		/* Step 6: Enable MT7531 PLL */
-		val = mt753x_reg_read(gsw, PLLGP_CR0);
+		ret = mt753x_reg_read_checked(gsw, PLLGP_CR0, &val);
+		if (ret < 0)
+			return ret;
 		val |= RG_COREPLL_EN;
-		mt753x_reg_write(gsw, PLLGP_CR0, val);
+		ret = mt753x_reg_write(gsw, PLLGP_CR0, val);
+		if (ret < 0)
+			return ret;
 
-		val = mt753x_reg_read(gsw, PLLGP_EN);
+		ret = mt753x_reg_read_checked(gsw, PLLGP_EN, &val);
+		if (ret < 0)
+			return ret;
 		val |= EN_COREPLL;
-		mt753x_reg_write(gsw, PLLGP_EN, val);
+		ret = mt753x_reg_write(gsw, PLLGP_EN, val);
+		if (ret < 0)
+			return ret;
 		usleep_range(25, 35);
 
 		break;
 	case XTAL_40MHZ:
 		/* Step 1 : Disable MT7531 COREPLL */
-		val = mt753x_reg_read(gsw, PLLGP_EN);
+		ret = mt753x_reg_read_checked(gsw, PLLGP_EN, &val);
+		if (ret < 0)
+			return ret;
 		val &= ~EN_COREPLL;
-		mt753x_reg_write(gsw, PLLGP_EN, val);
+		ret = mt753x_reg_write(gsw, PLLGP_EN, val);
+		if (ret < 0)
+			return ret;
 
 		/* Step 2: switch to XTAL output */
-		val = mt753x_reg_read(gsw, PLLGP_EN);
+		ret = mt753x_reg_read_checked(gsw, PLLGP_EN, &val);
+		if (ret < 0)
+			return ret;
 		val |= SW_CLKSW;
-		mt753x_reg_write(gsw, PLLGP_EN, val);
+		ret = mt753x_reg_write(gsw, PLLGP_EN, val);
+		if (ret < 0)
+			return ret;
 
-		val = mt753x_reg_read(gsw, PLLGP_CR0);
+		ret = mt753x_reg_read_checked(gsw, PLLGP_CR0, &val);
+		if (ret < 0)
+			return ret;
 		val &= ~RG_COREPLL_EN;
-		mt753x_reg_write(gsw, PLLGP_CR0, val);
+		ret = mt753x_reg_write(gsw, PLLGP_CR0, val);
+		if (ret < 0)
+			return ret;
 
 		/* Step 3: disable PLLGP and enable program PLLGP */
-		val = mt753x_reg_read(gsw, PLLGP_EN);
+		ret = mt753x_reg_read_checked(gsw, PLLGP_EN, &val);
+		if (ret < 0)
+			return ret;
 		val |= SW_PLLGP;
-		mt753x_reg_write(gsw, PLLGP_EN, val);
+		ret = mt753x_reg_write(gsw, PLLGP_EN, val);
+		if (ret < 0)
+			return ret;
 
 		/* Step 4: program COREPLL output frequency to 500MHz */
-		val = mt753x_reg_read(gsw, PLLGP_CR0);
+		ret = mt753x_reg_read_checked(gsw, PLLGP_CR0, &val);
+		if (ret < 0)
+			return ret;
 		val &= ~RG_COREPLL_POSDIV_M;
 		val |= 2 << RG_COREPLL_POSDIV_S;
-		mt753x_reg_write(gsw, PLLGP_CR0, val);
+		ret = mt753x_reg_write(gsw, PLLGP_CR0, val);
+		if (ret < 0)
+			return ret;
 		usleep_range(25, 35);
 
-		val = mt753x_reg_read(gsw, PLLGP_CR0);
+		ret = mt753x_reg_read_checked(gsw, PLLGP_CR0, &val);
+		if (ret < 0)
+			return ret;
 		val &= ~RG_COREPLL_SDM_PCW_M;
 		val |= 0x190000 << RG_COREPLL_SDM_PCW_S;
-		mt753x_reg_write(gsw, PLLGP_CR0, val);
+		ret = mt753x_reg_write(gsw, PLLGP_CR0, val);
+		if (ret < 0)
+			return ret;
 
 		/* Set feedback divide ratio update signal to high */
-		val = mt753x_reg_read(gsw, PLLGP_CR0);
+		ret = mt753x_reg_read_checked(gsw, PLLGP_CR0, &val);
+		if (ret < 0)
+			return ret;
 		val |= RG_COREPLL_SDM_PCW_CHG;
-		mt753x_reg_write(gsw, PLLGP_CR0, val);
+		ret = mt753x_reg_write(gsw, PLLGP_CR0, val);
+		if (ret < 0)
+			return ret;
 		/* Wait for at least 16 XTAL clocks */
 		usleep_range(10, 20);
 
 		/* Step 5: set feedback divide ratio update signal to low */
-		val = mt753x_reg_read(gsw, PLLGP_CR0);
+		ret = mt753x_reg_read_checked(gsw, PLLGP_CR0, &val);
+		if (ret < 0)
+			return ret;
 		val &= ~RG_COREPLL_SDM_PCW_CHG;
-		mt753x_reg_write(gsw, PLLGP_CR0, val);
+		ret = mt753x_reg_write(gsw, PLLGP_CR0, val);
+		if (ret < 0)
+			return ret;
 
 		/* Enable 325M clock for SGMII */
-		mt753x_reg_write(gsw, ANA_PLLGP_CR5, 0xad0000);
+		ret = mt753x_reg_write(gsw, ANA_PLLGP_CR5, 0xad0000);
+		if (ret < 0)
+			return ret;
 
 		/* Enable 250SSC clock for RGMII */
-		mt753x_reg_write(gsw, ANA_PLLGP_CR2, 0x4f40000);
+		ret = mt753x_reg_write(gsw, ANA_PLLGP_CR2, 0x4f40000);
+		if (ret < 0)
+			return ret;
 
 		/* Step 6: Enable MT7531 PLL */
-		val = mt753x_reg_read(gsw, PLLGP_CR0);
+		ret = mt753x_reg_read_checked(gsw, PLLGP_CR0, &val);
+		if (ret < 0)
+			return ret;
 		val |= RG_COREPLL_EN;
-		mt753x_reg_write(gsw, PLLGP_CR0, val);
+		ret = mt753x_reg_write(gsw, PLLGP_CR0, val);
+		if (ret < 0)
+			return ret;
 
-		val = mt753x_reg_read(gsw, PLLGP_EN);
+		ret = mt753x_reg_read_checked(gsw, PLLGP_EN, &val);
+		if (ret < 0)
+			return ret;
 		val |= EN_COREPLL;
-		mt753x_reg_write(gsw, PLLGP_EN, val);
+		ret = mt753x_reg_write(gsw, PLLGP_EN, val);
+		if (ret < 0)
+			return ret;
 		usleep_range(25, 35);
 		break;
 	}
+
+	return 0;
 }
 
 static int mt7531_internal_phy_calibration(struct gsw_mt753x *gsw)
@@ -591,12 +730,17 @@ static int mt7531_internal_phy_calibration(struct gsw_mt753x *gsw)
 static int mt7531_sw_detect(struct gsw_mt753x *gsw, struct chip_rev *crev)
 {
 	u32 rev, topsig;
+	int ret;
 
-	rev = mt753x_reg_read(gsw, CHIP_REV);
+	ret = mt753x_reg_read_checked(gsw, CHIP_REV, &rev);
+	if (ret < 0)
+		return ret;
 
 	if (((rev & CHIP_NAME_M) >> CHIP_NAME_S) == MT7531) {
 		if (crev) {
-			topsig = mt753x_reg_read(gsw, TOP_SIG_SR);
+			ret = mt753x_reg_read_checked(gsw, TOP_SIG_SR, &topsig);
+			if (ret < 0)
+				return ret;
 
 			crev->rev = rev & CHIP_REV_M;
 			crev->name = topsig & PAD_DUAL_SGMII_EN ?
@@ -606,215 +750,366 @@ static int mt7531_sw_detect(struct gsw_mt753x *gsw, struct chip_rev *crev)
 		return 0;
 	}
 
-	return -ENODEV;
+	return 1;
 }
 
-static void pinmux_set_mux_7531(struct gsw_mt753x *gsw, u32 pin, u32 mode)
+static int pinmux_set_mux_7531(struct gsw_mt753x *gsw, u32 pin, u32 mode)
 {
 	u32 val;
+	int ret;
 
-	val = mt753x_reg_read(gsw, GPIO_MODE_REGS(pin));
+	ret = mt753x_reg_read_checked(gsw, GPIO_MODE_REGS(pin), &val);
+	if (ret < 0)
+		return ret;
 	val &= ~(0xf << (pin & 7) * GPIO_MODE_S);
 	val |= mode << (pin & 7) * GPIO_MODE_S;
-	mt753x_reg_write(gsw, GPIO_MODE_REGS(pin), val);
+	ret = mt753x_reg_write(gsw, GPIO_MODE_REGS(pin), val);
+	if (ret < 0)
+		return ret;
+
+	return 0;
 }
 
 static int mt7531_set_gpio_pinmux(struct gsw_mt753x *gsw)
 {
 	u32 group = 0;
+	int ret;
 	struct device_node *np = gsw->dev->of_node;
 
 	/* Set GPIO 0 interrupt mode */
-	pinmux_set_mux_7531(gsw, gpio_int_pins[0], gpio_int_funcs[0]);
+	ret = pinmux_set_mux_7531(gsw, gpio_int_pins[0], gpio_int_funcs[0]);
+	if (ret < 0)
+		return ret;
 
 	of_property_read_u32(np, "mediatek,mdio_master_pinmux", &group);
 
 	/* group = 0: do nothing, 1: 1st group (AE), 2: 2nd group (BE) */
 	if (group > 0 && group <= 2) {
 		group--;
-		pinmux_set_mux_7531(gsw, gpio_mdc_pins[group],
-		                    gpio_mdc_funcs[group]);
-		pinmux_set_mux_7531(gsw, gpio_mdio_pins[group],
-		                    gpio_mdio_funcs[group]);
+		ret = pinmux_set_mux_7531(gsw, gpio_mdc_pins[group],
+		                          gpio_mdc_funcs[group]);
+		if (ret < 0)
+			return ret;
+		ret = pinmux_set_mux_7531(gsw, gpio_mdio_pins[group],
+		                          gpio_mdio_funcs[group]);
+		if (ret < 0)
+			return ret;
 	}
 
 	return 0;
 }
 
-static void mt7531_phy_pll_setup(struct gsw_mt753x *gsw)
+static int mt7531_phy_pll_setup(struct gsw_mt753x *gsw)
 {
+	int ret;
 	u32 hwstrap;
-	u32 val;
+	int val;
 
-	hwstrap = mt753x_reg_read(gsw, HWSTRAP);
+	ret = mt753x_reg_read_checked(gsw, HWSTRAP, &hwstrap);
+	if (ret < 0)
+		return ret;
 
 	switch ((hwstrap & XTAL_FSEL_M) >> XTAL_FSEL_S) {
 	case XTAL_25MHZ:
 		/* disable pll auto calibration */
-		gsw->mmd_write(gsw, 0, PHY_DEV1F, PHY_DEV1F_REG_104, 0x608);
+		ret = gsw->mmd_write(gsw, 0, PHY_DEV1F, PHY_DEV1F_REG_104, 0x608);
+		if (ret < 0)
+			return ret;
 
 		/* change pll sel */
 		val = gsw->mmd_read(gsw, 0, PHY_DEV1F,
 		                    PHY_DEV1F_REG_403);
+		if (val < 0)
+			return val;
 		val &= ~(PHY_PLL_M);
 		val |= PHY_PLL_SEL(3);
-		gsw->mmd_write(gsw, 0, PHY_DEV1F, PHY_DEV1F_REG_403, val);
+		ret = gsw->mmd_write(gsw, 0, PHY_DEV1F, PHY_DEV1F_REG_403, val);
+		if (ret < 0)
+			return ret;
 
 		/* set divider ratio */
-		gsw->mmd_write(gsw, 0, PHY_DEV1F,
-		               PHY_DEV1F_REG_10A, 0x1009);
+		ret = gsw->mmd_write(gsw, 0, PHY_DEV1F,
+		                     PHY_DEV1F_REG_10A, 0x1009);
+		if (ret < 0)
+			return ret;
 
 		/* set divider ratio */
-		gsw->mmd_write(gsw, 0, PHY_DEV1F, PHY_DEV1F_REG_10B, 0x7c6);
+		ret = gsw->mmd_write(gsw, 0, PHY_DEV1F, PHY_DEV1F_REG_10B, 0x7c6);
+		if (ret < 0)
+			return ret;
 
 		/* capacitance and resistance adjustment */
-		gsw->mmd_write(gsw, 0, PHY_DEV1F,
-		               PHY_DEV1F_REG_10C, 0xa8be);
+		ret = gsw->mmd_write(gsw, 0, PHY_DEV1F,
+		                     PHY_DEV1F_REG_10C, 0xa8be);
+		if (ret < 0)
+			return ret;
 
 		break;
 	case XTAL_40MHZ:
 		/* disable pll auto calibration */
-		gsw->mmd_write(gsw, 0, PHY_DEV1F, PHY_DEV1F_REG_104, 0x608);
+		ret = gsw->mmd_write(gsw, 0, PHY_DEV1F, PHY_DEV1F_REG_104, 0x608);
+		if (ret < 0)
+			return ret;
 
 		/* change pll sel */
 		val = gsw->mmd_read(gsw, 0, PHY_DEV1F,
 		                    PHY_DEV1F_REG_403);
+		if (val < 0)
+			return val;
 		val &= ~(PHY_PLL_M);
 		val |= PHY_PLL_SEL(3);
-		gsw->mmd_write(gsw, 0, PHY_DEV1F, PHY_DEV1F_REG_403, val);
+		ret = gsw->mmd_write(gsw, 0, PHY_DEV1F, PHY_DEV1F_REG_403, val);
+		if (ret < 0)
+			return ret;
 
 		/* set divider ratio */
-		gsw->mmd_write(gsw, 0, PHY_DEV1F,
-		               PHY_DEV1F_REG_10A, 0x1018);
+		ret = gsw->mmd_write(gsw, 0, PHY_DEV1F,
+		                     PHY_DEV1F_REG_10A, 0x1018);
+		if (ret < 0)
+			return ret;
 
 		/* set divider ratio */
-		gsw->mmd_write(gsw, 0, PHY_DEV1F, PHY_DEV1F_REG_10B, 0xc676);
+		ret = gsw->mmd_write(gsw, 0, PHY_DEV1F, PHY_DEV1F_REG_10B, 0xc676);
+		if (ret < 0)
+			return ret;
 
 		/* capacitance and resistance adjustment */
-		gsw->mmd_write(gsw, 0, PHY_DEV1F,
-		               PHY_DEV1F_REG_10C, 0xd8be);
+		ret = gsw->mmd_write(gsw, 0, PHY_DEV1F,
+		                     PHY_DEV1F_REG_10C, 0xd8be);
+		if (ret < 0)
+			return ret;
 		break;
 	}
 
 	/* power down pll. additional delay is not required via mdio access */
-	gsw->mmd_write(gsw, 0, PHY_DEV1F, PHY_DEV1F_REG_10D, 0x10);
+	ret = gsw->mmd_write(gsw, 0, PHY_DEV1F, PHY_DEV1F_REG_10D, 0x10);
+	if (ret < 0)
+		return ret;
 
 	/* power up pll */
-	gsw->mmd_write(gsw, 0, PHY_DEV1F, PHY_DEV1F_REG_10D, 0x14);
+	ret = gsw->mmd_write(gsw, 0, PHY_DEV1F, PHY_DEV1F_REG_10D, 0x14);
+	if (ret < 0)
+		return ret;
+
+	return 0;
 }
 
-static void mt7531_phy_setting(struct gsw_mt753x *gsw)
+static int mt7531_phy_setting(struct gsw_mt753x *gsw)
 {
+	int ret;
 	int i;
-	u32 val;
+	int val;
 
 	/* Adjust DAC TX Delay */
-	gsw->mmd_write(gsw, 0, PHY_DEV1F, PHY_DEV1F_REG_44, 0xc0);
+	ret = gsw->mmd_write(gsw, 0, PHY_DEV1F, PHY_DEV1F_REG_44, 0xc0);
+	if (ret < 0)
+		return ret;
 
 	for (i = 0; i < MT753X_NUM_PHYS; i++) {
 		/* Disable EEE */
-		gsw->mmd_write(gsw, i, PHY_DEV07, PHY_DEV07_REG_03C, 0);
+		ret = gsw->mmd_write(gsw, i, PHY_DEV07, PHY_DEV07_REG_03C, 0);
+		if (ret < 0)
+			goto restore_page;
 
 		/* Enable HW auto downshift */
-		gsw->mii_write(gsw, i, 0x1f, 0x1);
+		ret = gsw->mii_write(gsw, i, 0x1f, 0x1);
+		if (ret < 0)
+			goto restore_page;
 		val = gsw->mii_read(gsw, i, PHY_EXT_REG_14);
+		if (val < 0) {
+			gsw->mii_write(gsw, i, 0x1f, 0);
+			return val;
+		}
 		val |= PHY_EN_DOWN_SHFIT;
-		gsw->mii_write(gsw, i, PHY_EXT_REG_14, val);
+		ret = gsw->mii_write(gsw, i, PHY_EXT_REG_14, val);
+		if (ret < 0)
+			goto restore_page;
 
 		/* Increase SlvDPSready time */
-		gsw->mii_write(gsw, i, 0x1f, 0x52b5);
-		gsw->mii_write(gsw, i, PHY_TR_REG_10, 0xafae);
-		gsw->mii_write(gsw, i, PHY_TR_REG_12, 0x2f);
-		gsw->mii_write(gsw, i, PHY_TR_REG_10, 0x8fae);
-		gsw->mii_write(gsw, i, 0x1f, 0);
+		ret = gsw->mii_write(gsw, i, 0x1f, 0x52b5);
+		if (ret < 0)
+			goto restore_page;
+		ret = gsw->mii_write(gsw, i, PHY_TR_REG_10, 0xafae);
+		if (ret < 0)
+			goto restore_page;
+		ret = gsw->mii_write(gsw, i, PHY_TR_REG_12, 0x2f);
+		if (ret < 0)
+			goto restore_page;
+		ret = gsw->mii_write(gsw, i, PHY_TR_REG_10, 0x8fae);
+		if (ret < 0)
+			goto restore_page;
+		ret = gsw->mii_write(gsw, i, 0x1f, 0);
+		if (ret < 0)
+			goto restore_page;
 
 		/* Adjust 100_mse_threshold */
-		gsw->mmd_write(gsw, i, PHY_DEV1E, PHY_DEV1E_REG_123, 0xffff);
+		ret = gsw->mmd_write(gsw, i, PHY_DEV1E, PHY_DEV1E_REG_123, 0xffff);
+		if (ret < 0)
+			goto restore_page;
 
 		/* Disable mcc */
-		gsw->mmd_write(gsw, i, PHY_DEV1E, PHY_DEV1E_REG_A6, 0x300);
+		ret = gsw->mmd_write(gsw, i, PHY_DEV1E, PHY_DEV1E_REG_A6, 0x300);
+		if (ret < 0)
+			goto restore_page;
 
 		/* PHY link down power saving enable */
 		val = gsw->mii_read(gsw, i, PHY_EXT_REG_17);
+		if (val < 0)
+			return val;
 		val |= PHY_LINKDOWN_POWER_SAVING_EN;
-		gsw->mii_write(gsw, i, PHY_EXT_REG_17, val);
+		ret = gsw->mii_write(gsw, i, PHY_EXT_REG_17, val);
+		if (ret < 0)
+			goto restore_page;
 
 		val = gsw->mmd_read(gsw, i, PHY_DEV1E, PHY_DEV1E_REG_0C6);
+		if (val < 0)
+			return val;
 		val &= ~PHY_POWER_SAVING_M;
 		val |= PHY_POWER_SAVING_TX << PHY_POWER_SAVING_S;
-		gsw->mmd_write(gsw, i, PHY_DEV1E, PHY_DEV1E_REG_0C6, val);
+		ret = gsw->mmd_write(gsw, i, PHY_DEV1E, PHY_DEV1E_REG_0C6, val);
+		if (ret < 0)
+			goto restore_page;
 
 		/* Set TX Pair delay selection */
-		gsw->mmd_write(gsw, i, PHY_DEV1E, PHY_DEV1E_REG_13, 0x404);
-		gsw->mmd_write(gsw, i, PHY_DEV1E, PHY_DEV1E_REG_14, 0x404);
+		ret = gsw->mmd_write(gsw, i, PHY_DEV1E, PHY_DEV1E_REG_13, 0x404);
+		if (ret < 0)
+			goto restore_page;
+		ret = gsw->mmd_write(gsw, i, PHY_DEV1E, PHY_DEV1E_REG_14, 0x404);
+		if (ret < 0)
+			goto restore_page;
 	}
+
+	return 0;
+
+restore_page:
+	/* Preserve the first error if restoring the standard page also fails. */
+	gsw->mii_write(gsw, i, 0x1f, 0);
+	return ret;
 }
 
-static void mt7531_adjust_line_driving(struct gsw_mt753x *gsw, u32 port)
+static int mt7531_adjust_line_driving(struct gsw_mt753x *gsw, u32 port)
 {
+	int ret;
+
 	/* For ADC timing margin window for LDO calibration */
-	gsw->mmd_write(gsw, port, PHY_DEV1E, RXADC_LDO_CONTROL_2, 0x2222);
+	ret = gsw->mmd_write(gsw, port, PHY_DEV1E, RXADC_LDO_CONTROL_2, 0x2222);
+	if (ret < 0)
+		return ret;
 
 	/* Adjust AD sample timing */
-	gsw->mmd_write(gsw, port, PHY_DEV1E, RXADC_CONTROL_3, 0x4444);
+	ret = gsw->mmd_write(gsw, port, PHY_DEV1E, RXADC_CONTROL_3, 0x4444);
+	if (ret < 0)
+		return ret;
 
 	/* Adjust Line driver current for different mode */
-	gsw->mmd_write(gsw, port, PHY_DEV1F, TXVLD_DA_271, 0x2ca5);
+	ret = gsw->mmd_write(gsw, port, PHY_DEV1F, TXVLD_DA_271, 0x2ca5);
+	if (ret < 0)
+		return ret;
 
 	/* Adjust Line driver current for different mode */
-	gsw->mmd_write(gsw, port, PHY_DEV1F, TXVLD_DA_272, 0xc6b);
+	ret = gsw->mmd_write(gsw, port, PHY_DEV1F, TXVLD_DA_272, 0xc6b);
+	if (ret < 0)
+		return ret;
 
 	/* Adjust Line driver amplitude for 10BT */
-	gsw->mmd_write(gsw, port, PHY_DEV1F, TXVLD_DA_273, 0x3000);
+	ret = gsw->mmd_write(gsw, port, PHY_DEV1F, TXVLD_DA_273, 0x3000);
+	if (ret < 0)
+		return ret;
 
 	/* Adjust RX Echo path filter */
-	gsw->mmd_write(gsw, port, PHY_DEV1E, PHY_DEV1E_REG_0FE, 0x2);
+	ret = gsw->mmd_write(gsw, port, PHY_DEV1E, PHY_DEV1E_REG_0FE, 0x2);
+	if (ret < 0)
+		return ret;
 
 	/* Adjust RX HVGA bias current */
-	gsw->mmd_write(gsw, port, PHY_DEV1E, PHY_DEV1E_REG_41, 0x3333);
+	ret = gsw->mmd_write(gsw, port, PHY_DEV1E, PHY_DEV1E_REG_41, 0x3333);
+	if (ret < 0)
+		return ret;
 
 	/* Adjust TX class AB driver 1 */
-	gsw->mmd_write(gsw, port, PHY_DEV1F, PHY_DEV1F_REG_268, 0x388);
+	ret = gsw->mmd_write(gsw, port, PHY_DEV1F, PHY_DEV1F_REG_268, 0x388);
+	if (ret < 0)
+		return ret;
 
 	/* Adjust TX class AB driver 2 */
-	gsw->mmd_write(gsw, port, PHY_DEV1F, PHY_DEV1F_REG_269, 0x4448);
+	ret = gsw->mmd_write(gsw, port, PHY_DEV1F, PHY_DEV1F_REG_269, 0x4448);
+	if (ret < 0)
+		return ret;
+
+	return 0;
 }
 
-static void mt7531_eee_setting(struct gsw_mt753x *gsw, u32 port)
+static int mt7531_eee_setting(struct gsw_mt753x *gsw, u32 port)
 {
+	int ret;
 	u32 tr_reg_control;
-	u32 val;
+	int val;
 
 	/* Disable generate signal to clear the scramble_lock when lpi mode */
 	val = gsw->mmd_read(gsw, port, PHY_DEV1E, PHY_DEV1E_REG_189);
+	if (val < 0)
+		return val;
 	val &= ~DESCRAMBLER_CLEAR_EN;
-	gsw->mmd_write(gsw, port, PHY_DEV1E, PHY_DEV1E_REG_189, val);
+	ret = gsw->mmd_write(gsw, port, PHY_DEV1E, PHY_DEV1E_REG_189, val);
+	if (ret < 0)
+		goto restore_page;
 
 	/* roll back CR*/
-	gsw->mii_write(gsw, port, 0x1f, 0x52b5);
-	gsw->mmd_write(gsw, port, 0x1e, 0x2d1, 0);
+	ret = gsw->mii_write(gsw, port, 0x1f, 0x52b5);
+	if (ret < 0)
+		goto restore_page;
+	ret = gsw->mmd_write(gsw, port, 0x1e, 0x2d1, 0);
+	if (ret < 0)
+		goto restore_page;
 	tr_reg_control = (1 << 15) | (0 << 13) | (DSP_CH << 11) |
 	                 (DSP_NOD_ADDR << 7) | (0x8 << 1);
-	gsw->mii_write(gsw, port, 17, 0x1b);
-	gsw->mii_write(gsw, port, 18, 0);
-	gsw->mii_write(gsw, port, 16, tr_reg_control);
+	ret = gsw->mii_write(gsw, port, 17, 0x1b);
+	if (ret < 0)
+		goto restore_page;
+	ret = gsw->mii_write(gsw, port, 18, 0);
+	if (ret < 0)
+		goto restore_page;
+	ret = gsw->mii_write(gsw, port, 16, tr_reg_control);
+	if (ret < 0)
+		goto restore_page;
 	tr_reg_control = (1 << 15) | (0 << 13) | (DSP_CH << 11) |
 	                 (DSP_NOD_ADDR << 7) | (0xf << 1);
-	gsw->mii_write(gsw, port, 17, 0);
-	gsw->mii_write(gsw, port, 18, 0);
-	gsw->mii_write(gsw, port, 16, tr_reg_control);
+	ret = gsw->mii_write(gsw, port, 17, 0);
+	if (ret < 0)
+		goto restore_page;
+	ret = gsw->mii_write(gsw, port, 18, 0);
+	if (ret < 0)
+		goto restore_page;
+	ret = gsw->mii_write(gsw, port, 16, tr_reg_control);
+	if (ret < 0)
+		goto restore_page;
 
 	tr_reg_control = (1 << 15) | (0 << 13) | (DSP_CH << 11) |
 	                 (DSP_NOD_ADDR << 7) | (0x10 << 1);
-	gsw->mii_write(gsw, port, 17, 0x500);
-	gsw->mii_write(gsw, port, 18, 0);
-	gsw->mii_write(gsw, port, 16, tr_reg_control);
+	ret = gsw->mii_write(gsw, port, 17, 0x500);
+	if (ret < 0)
+		goto restore_page;
+	ret = gsw->mii_write(gsw, port, 18, 0);
+	if (ret < 0)
+		goto restore_page;
+	ret = gsw->mii_write(gsw, port, 16, tr_reg_control);
+	if (ret < 0)
+		goto restore_page;
+	ret = gsw->mii_write(gsw, port, 0x1f, 0);
+	if (ret < 0)
+		goto restore_page;
+
+	return 0;
+
+restore_page:
+	/* Preserve the first error if restoring the standard page also fails. */
 	gsw->mii_write(gsw, port, 0x1f, 0);
+	return ret;
 }
 
 static int mt7531_sw_init(struct gsw_mt753x *gsw)
 {
-	int i;
+	int i, phy_val, ret;
 	u32 val;
 
 	gsw->phy_base = (gsw->smi_addr + 1) & MT753X_SMI_ADDR_MASK;
@@ -825,79 +1120,125 @@ static int mt7531_sw_init(struct gsw_mt753x *gsw)
 	gsw->mmd_write = mt753x_mmd_write;
 
 	for (i = 0; i < MT753X_NUM_PHYS; i++) {
-		val = gsw->mii_read(gsw, i, MII_BMCR);
-		val |= BMCR_ISOLATE;
-		gsw->mii_write(gsw, i, MII_BMCR, val);
+		phy_val = gsw->mii_read(gsw, i, MII_BMCR);
+		if (phy_val < 0)
+			return phy_val;
+		phy_val |= BMCR_ISOLATE;
+		phy_val = gsw->mii_write(gsw, i, MII_BMCR, phy_val);
+		if (phy_val < 0)
+			return phy_val;
 	}
 
 	/* Force MAC link down before reset */
-	mt753x_reg_write(gsw, PMCR(5), FORCE_MODE_LNK);
-	mt753x_reg_write(gsw, PMCR(6), FORCE_MODE_LNK);
+	ret = mt753x_reg_write(gsw, PMCR(5), FORCE_MODE_LNK);
+	if (ret < 0)
+		return ret;
+	ret = mt753x_reg_write(gsw, PMCR(6), FORCE_MODE_LNK);
+	if (ret < 0)
+		return ret;
 
 	/* Switch soft reset */
-	mt753x_reg_write(gsw, SYS_CTRL, SW_SYS_RST | SW_REG_RST);
+	ret = mt753x_reg_write(gsw, SYS_CTRL, SW_SYS_RST | SW_REG_RST);
+	if (ret < 0)
+		return ret;
 	usleep_range(10, 20);
 
 	/* Enable MDC input Schmitt Trigger */
-	val = mt753x_reg_read(gsw, SMT0_IOLB);
-	mt753x_reg_write(gsw, SMT0_IOLB, val | SMT_IOLB_5_SMI_MDC_EN);
+	ret = mt753x_reg_read_checked(gsw, SMT0_IOLB, &val);
+	if (ret < 0)
+		return ret;
+	ret = mt753x_reg_write(gsw, SMT0_IOLB, val | SMT_IOLB_5_SMI_MDC_EN);
+	if (ret < 0)
+		return ret;
 
 	/* Set 7531 gpio pinmux */
-	mt7531_set_gpio_pinmux(gsw);
+	ret = mt7531_set_gpio_pinmux(gsw);
+	if (ret < 0)
+		return ret;
 
 	/* Global mac control settings */
-	mt753x_reg_write(gsw, GMACCR,
-	                 (15 << MTCC_LMT_S) | (11 << MAX_RX_JUMBO_S) |
-	                 RX_PKT_LEN_MAX_JUMBO);
+	ret = mt753x_reg_write(gsw, GMACCR,
+	                       (15 << MTCC_LMT_S) | (11 << MAX_RX_JUMBO_S) |
+	                       RX_PKT_LEN_MAX_JUMBO);
+	if (ret < 0)
+		return ret;
 
-	mt7531_core_pll_setup(gsw);
-	mt7531_mac_port_setup(gsw, 5, &gsw->port5_cfg);
-	mt7531_mac_port_setup(gsw, 6, &gsw->port6_cfg);
-
-	return 0;
+	ret = mt7531_core_pll_setup(gsw);
+	if (ret < 0)
+		return ret;
+	ret = mt7531_mac_port_setup(gsw, 5, &gsw->port5_cfg);
+	if (ret < 0)
+		return ret;
+	return mt7531_mac_port_setup(gsw, 6, &gsw->port6_cfg);
 }
 
 static int mt7531_sw_post_init(struct gsw_mt753x *gsw)
 {
-	int i;
+	int i, phy_val, ret;
 	u32 val;
 
-	mt7531_phy_pll_setup(gsw);
+	phy_val = mt7531_phy_pll_setup(gsw);
+	if (phy_val < 0)
+		return phy_val;
 
 	/* Internal PHYs are disabled by default. SW should enable them.
 	 * Note that this may already be enabled in bootloader stage.
 	 */
-	val = gsw->mmd_read(gsw, 0, PHY_DEV1F, PHY_DEV1F_REG_403);
-	val |= PHY_EN_BYPASS_MODE;
-	val &= ~POWER_ON_OFF;
-	gsw->mmd_write(gsw, 0, PHY_DEV1F, PHY_DEV1F_REG_403, val);
+	phy_val = gsw->mmd_read(gsw, 0, PHY_DEV1F, PHY_DEV1F_REG_403);
+	if (phy_val < 0)
+		return phy_val;
+	phy_val |= PHY_EN_BYPASS_MODE;
+	phy_val &= ~POWER_ON_OFF;
+	phy_val = gsw->mmd_write(gsw, 0, PHY_DEV1F, PHY_DEV1F_REG_403, phy_val);
+	if (phy_val < 0)
+		return phy_val;
 
-	mt7531_phy_setting(gsw);
+	phy_val = mt7531_phy_setting(gsw);
+	if (phy_val < 0)
+		return phy_val;
 
 	for (i = 0; i < MT753X_NUM_PHYS; i++) {
-		val = gsw->mii_read(gsw, i, MII_BMCR);
-		val &= ~BMCR_ISOLATE;
-		gsw->mii_write(gsw, i, MII_BMCR, val);
+		phy_val = gsw->mii_read(gsw, i, MII_BMCR);
+		if (phy_val < 0)
+			return phy_val;
+		phy_val &= ~BMCR_ISOLATE;
+		phy_val = gsw->mii_write(gsw, i, MII_BMCR, phy_val);
+		if (phy_val < 0)
+			return phy_val;
 	}
 
-	for (i = 0; i < MT753X_NUM_PHYS; i++)
-		mt7531_adjust_line_driving(gsw, i);
+	for (i = 0; i < MT753X_NUM_PHYS; i++) {
+		phy_val = mt7531_adjust_line_driving(gsw, i);
+		if (phy_val < 0)
+			return phy_val;
+	}
 
-	for (i = 0; i < MT753X_NUM_PHYS; i++)
-		mt7531_eee_setting(gsw, i);
+	for (i = 0; i < MT753X_NUM_PHYS; i++) {
+		phy_val = mt7531_eee_setting(gsw, i);
+		if (phy_val < 0)
+			return phy_val;
+	}
 
-	val = mt753x_reg_read(gsw, CHIP_REV);
+	ret = mt753x_reg_read_checked(gsw, CHIP_REV, &val);
+	if (ret < 0)
+		return ret;
 	val &= CHIP_REV_M;
 	if (val == CHIP_REV_E1) {
 		mt7531_internal_phy_calibration(gsw);
 	} else {
-		val = mt753x_reg_read(gsw, GBE_EFUSE);
+		ret = mt753x_reg_read_checked(gsw, GBE_EFUSE, &val);
+		if (ret < 0)
+			return ret;
 		if (val & GBE_SEL_EFUSE_EN) {
-			val = gsw->mmd_read(gsw, 0, PHY_DEV1F,
-			                    PHY_DEV1F_REG_403);
-			val &= ~GBE_EFUSE_SETTING;
-			gsw->mmd_write(gsw, 0, PHY_DEV1F, PHY_DEV1F_REG_403,
-			               val);
+			phy_val = gsw->mmd_read(gsw, 0, PHY_DEV1F,
+			                        PHY_DEV1F_REG_403);
+			if (phy_val < 0)
+				return phy_val;
+			phy_val &= ~GBE_EFUSE_SETTING;
+			phy_val = gsw->mmd_write(gsw, 0, PHY_DEV1F, PHY_DEV1F_REG_403,
+			               phy_val);
+			if (phy_val < 0)
+				return phy_val;
 		} else {
 			mt7531_internal_phy_calibration(gsw);
 		}

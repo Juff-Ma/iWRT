@@ -245,6 +245,7 @@ static int gsw_api_release(struct inode *inode,
 
 int gsw_api_drv_register(u32 major)
 {
+#if defined(GSW_IOCTL_SUPPORT) && GSW_IOCTL_SUPPORT
 	int result;
 	result = register_chrdev(major, ETHSW_API_DEV_NAME, &swapi_fops);
 	if (result < 0) {
@@ -253,12 +254,15 @@ int gsw_api_drv_register(u32 major)
 	}
 	pr_info("SWAPI: Registered char device [%s] with major no [%d]\n",
 	        ETHSW_API_DEV_NAME, major);
+#endif
 	return 0;
 }
 
 int gsw_api_drv_unregister(u32 major)
 {
+#if defined(GSW_IOCTL_SUPPORT) && GSW_IOCTL_SUPPORT
 	unregister_chrdev(major, ETHSW_API_DEV_NAME);
+#endif
 	return 0;
 }
 #endif /* KERNEL_MODE */
