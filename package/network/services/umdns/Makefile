@@ -9,7 +9,6 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=umdns
 PKG_RELEASE:=1
-PKG_VERSION:=20260628
 
 PKG_SOURCE_URL=$(PROJECT_GIT)/project/mdnsd.git
 PKG_SOURCE_PROTO:=git
@@ -17,9 +16,7 @@ PKG_SOURCE_DATE:=2026-10-04
 PKG_SOURCE_VERSION:=defe7ccfd20281b9ef4dfa45437813386a64f8ba
 PKG_MIRROR_HASH:=9069cf95ed96b7a5285cf3ff9dbd0f23244f3232b2507812fda4bdb03721bc20
 
-PKG_BUILD_DIR:=$(BUILD_DIR)/mdnsd-$(PKG_VERSION)
-
-PKG_MAINTAINER:=Minqiang Chen <ptpt52@gmail.com>
+PKG_MAINTAINER:=John Crispin <john@phrozen.org>
 PKG_LICENSE:=LGPL-2.1
 
 include $(INCLUDE_DIR)/package-seccomp.mk
