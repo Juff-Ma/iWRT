@@ -1,0 +1,9 @@
+--- a/net/strparser/strparser.c   2026-10-03 12:39:03.000000000 +0200
++++ b/net/strparser/strparser.c   2026-10-16 20:38:17.165146367 +0200
+@@ -545,3 +545,6 @@
+        return 0;
+ }
+ device_initcall(strp_dev_init);
++
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("Stream Parser for application-layer messages");
