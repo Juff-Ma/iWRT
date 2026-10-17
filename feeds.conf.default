@@ -3,4 +3,4 @@ src-git luci https://github.com/x-wrt/luci.git;26.10_b202610162149
 src-git routing https://github.com/x-wrt/routing.git;26.10_b202610162149
 src-git telephony https://github.com/x-wrt/telephony.git;26.10_b202610162149
 src-git video https://github.com/x-wrt/video.git;26.10_b202610162149
-src-git i https://codeberg.org/Juff-Ma/iWRT-Packages.git;b202610162149_v1
+src-git i https://codeberg.org/Juff-Ma/iWRT-Packages.git;b202610162149_v2
